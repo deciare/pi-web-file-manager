@@ -755,7 +755,6 @@ export class FileManagerPanel extends LitElement {
             ${this.#menuItem(this.#showHidden ? "Hide hidden files" : "Show hidden files", () => this.#toggleHidden())}
           `
           : html`
-            ${this.#menuItem("Open", () => { this.#closeMenu(); void this.#openEntry(entry); })}
             ${this.#menuItem(entry.kind === "directory" ? "Download as .zip" : "Download", () => { this.#closeMenu(); this.#downloadEntry(entry); })}
             ${this.#menuItem("Copy path", () => this.#copyPath(entry))}
             ${this.#relativePath(entry.path) === undefined ? "" : this.#menuItem("Copy relative path", () => this.#copyRelativePath(entry))}
