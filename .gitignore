@@ -1,4 +1,5 @@
 node_modules/
 browser/
 server-plugin.js
+server-plugin.js.map
 *.log
