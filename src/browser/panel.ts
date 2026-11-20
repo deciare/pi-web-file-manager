@@ -51,10 +51,21 @@ interface DeletePlan {
   readonly truncated: boolean;
 }
 
+/** What kind of thing is in the way, as far as the reader is concerned. */
+type ConflictKind = "file" | "folder";
+
 type DialogState =
   | { readonly kind: "newFolder"; readonly draft: string; readonly error?: string }
   | { readonly kind: "newFile"; readonly draft: string; readonly error?: string }
-  | { readonly kind: "rename"; readonly entry: FileEntry; readonly draft: string; readonly error?: string }
+  | {
+    readonly kind: "rename";
+    readonly entry: FileEntry;
+    readonly draft: string;
+    readonly error?: string | undefined;
+    /** The new name is taken; offer to replace instead of refusing. */
+    readonly canReplace?: boolean | undefined;
+    readonly conflictKind?: ConflictKind | undefined;
+  }
   | { readonly kind: "delete"; readonly entry: FileEntry; readonly plan: DeletePlan; readonly error?: string }
   | { readonly kind: "replace"; readonly file: File; readonly error?: string }
   | {
@@ -67,6 +78,7 @@ type DialogState =
     readonly error?: string | undefined;
     /** The destination name is taken; offer to replace instead of refusing. */
     readonly canReplace?: boolean | undefined;
+    readonly conflictKind?: ConflictKind | undefined;
   };
 
 interface MenuState {
@@ -584,6 +596,14 @@ export class FileManagerPanel extends LitElement {
     this.requestUpdate();
   }
 
+  /** What sits at a path the rename was refused for. */
+  async #conflictKind(client: FileManagerClient, path: string): Promise<ConflictKind> {
+    const result = await client.stat(path);
+    if (result.ok === false) return "file";
+    const entry = result.data.entry;
+    return entry.kind === "directory" || entry.linkKind === "directory" ? "folder" : "file";
+  }
+
   async #submitMove(overwrite = false): Promise<void> {
     const dialog = this.#dialog;
     const client = this.#client;
@@ -593,11 +613,18 @@ export class FileManagerPanel extends LitElement {
     if (result.ok === false) {
       // The server's code is the contract; the sentence is this dialog's, so a
       // wording fix lands with a reload instead of a daemon restart.
-      const taken = result.error.code === "EEXIST";
-      const error = taken
-        ? `A file or folder named ${dialog.entry.name} already exists in that folder.`
-        : result.error.message;
-      this.#dialog = { ...dialog, error, canReplace: taken };
+      if (result.error.code !== "EEXIST") {
+        this.#dialog = { ...dialog, error: result.error.message, canReplace: false };
+        this.requestUpdate();
+        return;
+      }
+      const conflictKind = await this.#conflictKind(client, target);
+      this.#dialog = {
+        ...dialog,
+        error: `A ${conflictKind} named ${dialog.entry.name} already exists in this folder.`,
+        canReplace: true,
+        conflictKind,
+      };
       this.requestUpdate();
       return;
     }
@@ -607,7 +634,7 @@ export class FileManagerPanel extends LitElement {
     await this.#refresh();
   }
 
-  async #submitName(): Promise<void> {
+  async #submitName(overwrite = false): Promise<void> {
     const dialog = this.#dialog;
     const client = this.#client;
     if (dialog === undefined || client === undefined) return;
@@ -626,9 +653,16 @@ export class FileManagerPanel extends LitElement {
     const directory = this.#directory ?? "/";
 
     if (dialog.kind === "rename") {
-      const result = await client.rename(dialog.entry.path, joinPath(parentPath(dialog.entry.path), name), false);
+      const target = joinPath(parentPath(dialog.entry.path), name);
+      const result = await client.rename(dialog.entry.path, target, overwrite);
       if (result.ok === false) {
-        this.#dialog = { ...dialog, error: result.error.message };
+        if (result.error.code !== "EEXIST") {
+          this.#dialog = { ...dialog, error: result.error.message, canReplace: false };
+          this.requestUpdate();
+          return;
+        }
+        const conflictKind = await this.#conflictKind(client, target);
+        this.#dialog = { ...dialog, error: `A ${conflictKind} with that name already exists.`, canReplace: true, conflictKind };
         this.requestUpdate();
         return;
       }
@@ -869,6 +903,7 @@ export class FileManagerPanel extends LitElement {
     }
     const title = dialog.kind === "newFolder" ? "New folder" : dialog.kind === "newFile" ? "New file" : `Rename ${dialog.entry.name}`;
     const action = dialog.kind === "rename" ? "Rename" : "Create";
+    const replacing = dialog.kind === "rename" && dialog.canReplace === true;
     return html`
       <dialog class="dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
         <h2>${title}</h2>
@@ -887,7 +922,9 @@ export class FileManagerPanel extends LitElement {
         ${dialog.error === undefined ? "" : html`<p class="dialog-error">${dialog.error}</p>`}
         <footer>
           <button @click=${() => this.#cancelDialog()}>Cancel</button>
-          <button class="primary" @click=${() => void this.#submitName()}>${action}</button>
+          ${replacing
+            ? html`<button class="danger" @click=${() => void this.#submitName(true)}>Replace ${dialog.conflictKind ?? "item"}</button>`
+            : html`<button class="primary" @click=${() => void this.#submitName()}>${action}</button>`}
         </footer>
       </dialog>
     `;
@@ -940,7 +977,7 @@ export class FileManagerPanel extends LitElement {
         <footer>
           <button @click=${() => this.#cancelDialog()}>Cancel</button>
           ${dialog.canReplace === true
-            ? html`<button class="danger" @click=${() => void this.#submitMove(true)}>Replace</button>`
+            ? html`<button class="danger" @click=${() => void this.#submitMove(true)}>Replace ${dialog.conflictKind ?? "item"}</button>`
             : html`<button class="primary" ?disabled=${blocked} @click=${() => void this.#submitMove()}>Move here</button>`}
         </footer>
       </dialog>

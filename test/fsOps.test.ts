@@ -295,3 +295,31 @@ test("refuses to move a folder into its own subtree", async () => {
     (error: unknown) => error instanceof Failure && error.code === "EINVAL",
   );
 });
+
+test("names the kind of thing that is already at the destination", async () => {
+  const box = await sandbox();
+  await mkdir(box.path("target-dir"));
+  await writeFile(box.path("target-file"), "x");
+  await writeFile(box.path("source"), "y");
+
+  const folder = renamePath({ from: box.path("source"), to: box.path("target-dir"), overwrite: false });
+  await assert.rejects(folder, (error: unknown) => error instanceof Failure && error.code === "EEXIST" && /A folder with that name/u.test(error.message));
+  const file = renamePath({ from: box.path("source"), to: box.path("target-file"), overwrite: false });
+  await assert.rejects(file, (error: unknown) => error instanceof Failure && error.code === "EEXIST" && /A file with that name/u.test(error.message));
+});
+
+test("replaces an empty destination folder but refuses a populated one", async () => {
+  const box = await sandbox();
+  await mkdir(box.path("from"));
+  await mkdir(box.path("empty"));
+  await mkdir(box.path("full"));
+  await writeFile(box.path("full/inside"), "x");
+
+  await renamePath({ from: box.path("from"), to: box.path("empty"), overwrite: true });
+  assert.equal(await stat(box.path("empty")).then((info) => info.isDirectory()), true);
+
+  await assert.rejects(
+    () => renamePath({ from: box.path("empty"), to: box.path("full"), overwrite: true }),
+    (error: unknown) => error instanceof Failure && error.code === "ENOTEMPTY",
+  );
+});

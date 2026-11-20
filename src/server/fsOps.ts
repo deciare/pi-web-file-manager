@@ -173,7 +173,16 @@ export async function renamePath(input: RenameRequest): Promise<RenameResponse> 
 
   const destination = await lstat(to).catch((error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? undefined : Promise.reject(error)));
   if (destination !== undefined && input.overwrite !== true) {
-    throw new Failure("EEXIST", "A file or folder with that name already exists", to);
+    // Naming the kind matters: replacing a file costs a file, replacing a
+    // folder can cost a tree, and the caller decides whether to offer that.
+    const kind = destination.isDirectory() ? "folder" : "file";
+    throw new Failure("EEXIST", `A ${kind} with that name already exists`, to);
+  }
+  // Replacing a folder only works when it is empty, and the errno that says so
+  // reads as noise. Naming it here keeps the refusal legible.
+  if (destination?.isDirectory() === true) {
+    const names = await readdir(to).catch(() => []);
+    if (names.length > 0) throw new Failure("ENOTEMPTY", "The folder at the destination is not empty", to);
   }
   await rename(from, to);
   return { path: to };
