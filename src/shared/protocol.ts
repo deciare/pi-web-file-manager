@@ -33,6 +33,8 @@ export interface FileEntry {
   readonly mtimeMs: number;
   /** Symlink destination as stored, not resolved. */
   readonly linkTarget?: string;
+  /** What a symlink resolves to, when it resolves at all. */
+  readonly linkKind?: "file" | "directory";
   /** True when a symlink's destination cannot be resolved. */
   readonly linkBroken?: boolean;
 }
