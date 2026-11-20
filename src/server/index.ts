@@ -28,10 +28,10 @@ function asRecord(input: unknown): Record<string, unknown> {
 const REQUEST_HANDLERS: Readonly<Record<FileManagerOperation, Handler>> = {
   list: (input) => listDirectory(asRecord(input)),
   stat: (input) => statPath(asRecord(input)),
-  readText: (input) => readTextFile(asRecord(input)),
+  "read.text": (input) => readTextFile(asRecord(input)),
   mkdir: (input) => makeDirectory(asRecord(input)),
   rename: (input) => renamePath(asRecord(input) as unknown as RenameRequest),
-  deletePlan: (input) => planDelete(asRecord(input)),
+  "delete.plan": (input) => planDelete(asRecord(input)),
   delete: (input) => deletePath(asRecord(input) as unknown as DeleteRequest),
 };
 
@@ -62,7 +62,7 @@ export async function request(context: RequestContext): Promise<Json> {
 
 export async function openChannel(context: ChannelOpenContext) {
   const opener = context.operation === "upload" ? openUploadChannel
-    : context.operation === "saveText" ? openSaveChannel
+    : context.operation === "save.text" ? openSaveChannel
       : undefined;
   if (opener === undefined) throw invalid(`Unknown channel operation: ${context.operation}`);
   return opener(context);

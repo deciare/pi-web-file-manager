@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import plugin, { openChannel, request } from "../src/server/index.ts";
 import { decode, sandbox } from "./support.ts";
+import { CHANNEL_OPERATIONS, REQUEST_OPERATIONS, RESOURCE_OPERATIONS } from "../src/shared/protocol.ts";
 
 function call(operation: string, input: unknown, signal = new AbortController().signal) {
   return request({ operation, input: input as never, signal });
@@ -32,7 +33,7 @@ test("maps a missing file to ENOENT with its path", async () => {
   const box = await sandbox();
   try {
     const missing = box.path("nope.txt");
-    const result = await call("readText", { path: missing });
+    const result = await call("read.text", { path: missing });
     assert.equal(result.ok, false);
     assert.equal((result as { error: { code: string; path?: string } }).error.code, "ENOENT");
     assert.equal((result as { error: { path?: string } }).error.path, missing);
@@ -59,7 +60,7 @@ test("reads a file as base64 through the envelope", async () => {
   const box = await sandbox();
   try {
     await writeFile(box.path("hello.txt"), "hello");
-    const result = await call("readText", { path: box.path("hello.txt") });
+    const result = await call("read.text", { path: box.path("hello.txt") });
     assert.equal(result.ok, true);
     assert.equal(decode((result as { data: { data: string } }).data.data), "hello");
   } finally {
@@ -77,4 +78,25 @@ test("rejects an unknown channel operation", async () => {
   await assert.rejects(
     () => openChannel({ operation: "teleport", input: {}, signal: new AbortController().signal, send: () => undefined }),
   );
+});
+
+test("every wire operation name is one the host will accept", () => {
+  // The host rejects an operation before dispatch when it does not match this
+  // pattern, so a camelCase name fails as "backend request unavailable".
+  const pattern = /^[a-z][a-z0-9.-]*$/u;
+  for (const name of [...REQUEST_OPERATIONS, ...CHANNEL_OPERATIONS, ...RESOURCE_OPERATIONS]) {
+    assert.match(name, pattern, name);
+    assert.ok(name.length <= 128, name);
+  }
+});
+
+test("dispatches the dotted operations", async () => {
+  const box = await sandbox();
+  try {
+    await writeFile(box.path("note.txt"), "hello");
+    assert.equal((await call("read.text", { path: box.path("note.txt") })).ok, true);
+    assert.equal((await call("delete.plan", { path: box.path("note.txt") })).ok, true);
+  } finally {
+    await box.cleanup();
+  }
 });

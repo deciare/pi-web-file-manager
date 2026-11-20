@@ -63,7 +63,7 @@ test("saves over an existing file and keeps its permissions", async () => {
     await chmod(box.path("script.sh"), 0o640);
     const current = await stat(box.path("script.sh"));
 
-    const harness = channelHarness("saveText", { path: box.path("script.sh"), expectedMtimeMs: current.mtimeMs });
+    const harness = channelHarness("save.text", { path: box.path("script.sh"), expectedMtimeMs: current.mtimeMs });
     const channel = await openChannel(harness.context);
     await channel.receive({ type: "chunk", data: base64("#!/bin/sh\nnew\n") }, harness.controller.signal);
     await channel.receive({ type: "end" }, harness.controller.signal);
@@ -81,7 +81,7 @@ test("refuses to save over a file that changed underneath the editor", async () 
     await writeFile(box.path("note.txt"), "as opened");
     const current = await stat(box.path("note.txt"));
 
-    const harness = channelHarness("saveText", { path: box.path("note.txt"), expectedMtimeMs: current.mtimeMs - 10_000 });
+    const harness = channelHarness("save.text", { path: box.path("note.txt"), expectedMtimeMs: current.mtimeMs - 10_000 });
     const channel = await openChannel(harness.context);
     await channel.receive({ type: "chunk", data: base64("clobber") }, harness.controller.signal);
     const error = framesOf(harness.frames).find((frame) => frame["type"] === "error");
@@ -95,7 +95,7 @@ test("refuses to save over a file that changed underneath the editor", async () 
 test("refuses to save a file that was removed since it was opened", async () => {
   const box = await sandbox();
   try {
-    const harness = channelHarness("saveText", { path: box.path("gone.txt"), expectedMtimeMs: 1234 });
+    const harness = channelHarness("save.text", { path: box.path("gone.txt"), expectedMtimeMs: 1234 });
     const channel = await openChannel(harness.context);
     await channel.receive({ type: "chunk", data: base64("text") }, harness.controller.signal);
     const error = framesOf(harness.frames).find((frame) => frame["type"] === "error");
@@ -108,7 +108,7 @@ test("refuses to save a file that was removed since it was opened", async () => 
 test("creates a new file when it was opened as one", async () => {
   const box = await sandbox();
   try {
-    const harness = channelHarness("saveText", { path: box.path("fresh.txt"), expectedMtimeMs: null });
+    const harness = channelHarness("save.text", { path: box.path("fresh.txt"), expectedMtimeMs: null });
     const channel = await openChannel(harness.context);
     await channel.receive({ type: "chunk", data: base64("new file") }, harness.controller.signal);
     await channel.receive({ type: "end" }, harness.controller.signal);
@@ -154,7 +154,7 @@ test("saves anyway when the caller forces past a changed mtime", async () => {
   const box = await sandbox();
   try {
     await writeFile(box.path("note.txt"), "on disk now");
-    const harness = channelHarness("saveText", { path: box.path("note.txt"), expectedMtimeMs: 1, force: true });
+    const harness = channelHarness("save.text", { path: box.path("note.txt"), expectedMtimeMs: 1, force: true });
     const channel = await openChannel(harness.context);
     await channel.receive({ type: "chunk", data: base64("what the editor saw") }, harness.controller.signal);
     await channel.receive({ type: "end" }, harness.controller.signal);

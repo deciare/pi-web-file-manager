@@ -123,14 +123,24 @@ export interface DeleteResponse {
   readonly removed: number;
 }
 
+/**
+ * Wire operation names, one list per transport. The host validates every name
+ * against /^[a-z][a-z0-9.-]*$/u and 128 characters, which is why these are
+ * lowercase and dotted rather than camelCase: a capital letter rejects the
+ * request before the plugin ever sees it.
+ */
+export const REQUEST_OPERATIONS = ["list", "stat", "read.text", "mkdir", "rename", "delete.plan", "delete"] as const;
+export const CHANNEL_OPERATIONS = ["upload", "save.text"] as const;
+export const RESOURCE_OPERATIONS = ["download", "zip"] as const;
+
 /** Operations served through `request`. */
 export interface FileManagerRequests {
   readonly list: { readonly input: ListRequest; readonly output: ListResponse };
   readonly stat: { readonly input: StatRequest; readonly output: StatResponse };
-  readonly readText: { readonly input: ReadTextRequest; readonly output: ReadTextResponse };
+  "read.text": { readonly input: ReadTextRequest; readonly output: ReadTextResponse };
   readonly mkdir: { readonly input: MkdirRequest; readonly output: MkdirResponse };
   readonly rename: { readonly input: RenameRequest; readonly output: RenameResponse };
-  readonly deletePlan: { readonly input: DeletePlanRequest; readonly output: DeletePlanResponse };
+  "delete.plan": { readonly input: DeletePlanRequest; readonly output: DeletePlanResponse };
   readonly delete: { readonly input: DeleteRequest; readonly output: DeleteResponse };
 }
 
