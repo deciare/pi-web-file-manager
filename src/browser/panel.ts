@@ -54,6 +54,19 @@ interface DeletePlan {
 /** What kind of thing is in the way, as far as the reader is concerned. */
 type ConflictKind = "file" | "folder";
 
+function kindOf(entry: FileEntry): ConflictKind {
+  return entry.kind === "directory" || entry.linkKind === "directory" ? "folder" : "file";
+}
+
+/**
+ * Only a file can replace a file. A folder cannot stand in for a file or the
+ * reverse — the kernel refuses both — and replacing a folder would mean
+ * deleting a tree, which is the user's decision to make, not a button's.
+ */
+function isReplaceable(source: ConflictKind, destination: ConflictKind): boolean {
+  return source === "file" && destination === "file";
+}
+
 type DialogState =
   | { readonly kind: "newFolder"; readonly draft: string; readonly error?: string }
   | { readonly kind: "newFile"; readonly draft: string; readonly error?: string }
@@ -596,12 +609,11 @@ export class FileManagerPanel extends LitElement {
     this.requestUpdate();
   }
 
-  /** What sits at a path the rename was refused for. */
+  /** What sits at a path a rename was refused for. */
   async #conflictKind(client: FileManagerClient, path: string): Promise<ConflictKind> {
     const result = await client.stat(path);
     if (result.ok === false) return "file";
-    const entry = result.data.entry;
-    return entry.kind === "directory" || entry.linkKind === "directory" ? "folder" : "file";
+    return kindOf(result.data.entry);
   }
 
   async #submitMove(overwrite = false): Promise<void> {
@@ -622,7 +634,7 @@ export class FileManagerPanel extends LitElement {
       this.#dialog = {
         ...dialog,
         error: `A ${conflictKind} named ${dialog.entry.name} already exists in this folder.`,
-        canReplace: true,
+        canReplace: isReplaceable(kindOf(dialog.entry), conflictKind),
         conflictKind,
       };
       this.requestUpdate();
@@ -662,7 +674,12 @@ export class FileManagerPanel extends LitElement {
           return;
         }
         const conflictKind = await this.#conflictKind(client, target);
-        this.#dialog = { ...dialog, error: `A ${conflictKind} with that name already exists.`, canReplace: true, conflictKind };
+        this.#dialog = {
+          ...dialog,
+          error: `A ${conflictKind} with that name already exists.`,
+          canReplace: isReplaceable(kindOf(dialog.entry), conflictKind),
+          conflictKind,
+        };
         this.requestUpdate();
         return;
       }

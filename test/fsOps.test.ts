@@ -323,3 +323,17 @@ test("replaces an empty destination folder but refuses a populated one", async (
     (error: unknown) => error instanceof Failure && error.code === "ENOTEMPTY",
   );
 });
+
+test("refuses to replace across kinds, which the kernel would refuse anyway", async () => {
+  const box = await sandbox();
+  await mkdir(box.path("folder"));
+  await writeFile(box.path("file"), "x");
+  await assert.rejects(
+    () => renamePath({ from: box.path("file"), to: box.path("folder"), overwrite: true }),
+    (error: unknown) => error instanceof Failure && error.code === "EEXIST" && /not interchangeable/u.test(error.message),
+  );
+  await assert.rejects(
+    () => renamePath({ from: box.path("folder"), to: box.path("file"), overwrite: true }),
+    (error: unknown) => error instanceof Failure && error.code === "EEXIST" && /not interchangeable/u.test(error.message),
+  );
+});

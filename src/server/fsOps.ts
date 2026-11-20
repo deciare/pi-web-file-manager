@@ -178,11 +178,19 @@ export async function renamePath(input: RenameRequest): Promise<RenameResponse> 
     const kind = destination.isDirectory() ? "folder" : "file";
     throw new Failure("EEXIST", `A ${kind} with that name already exists`, to);
   }
-  // Replacing a folder only works when it is empty, and the errno that says so
-  // reads as noise. Naming it here keeps the refusal legible.
-  if (destination?.isDirectory() === true) {
-    const names = await readdir(to).catch(() => []);
-    if (names.length > 0) throw new Failure("ENOTEMPTY", "The folder at the destination is not empty, so it cannot be replaced", to);
+  if (destination !== undefined) {
+    // A file and a folder cannot stand in for each other: the kernel refuses
+    // both crossings, and its errno reads as noise. Only a file may replace a
+    // file, and only an empty folder may replace a folder.
+    const source = await lstat(from);
+    if (destination.isDirectory() !== source.isDirectory()) {
+      const kind = destination.isDirectory() ? "folder" : "file";
+      throw new Failure("EEXIST", `A ${kind} with that name already exists, and the two are not interchangeable`, to);
+    }
+    if (destination.isDirectory()) {
+      const names = await readdir(to).catch(() => []);
+      if (names.length > 0) throw new Failure("ENOTEMPTY", "The folder at the destination is not empty, so it cannot be replaced", to);
+    }
   }
   await rename(from, to);
   return { path: to };
