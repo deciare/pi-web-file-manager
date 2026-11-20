@@ -54,16 +54,24 @@ export function parentPath(path: string): string {
 }
 
 /**
- * The path as it reads from `root`, or undefined when it is outside it. Used for
- * "copy relative path", where the useful form is the one a command in the
- * workspace root would accept. The root itself is `.`.
+ * The path as it reads from `root`, in the form a shell command run from the
+ * root would accept. A path outside the root climbs out with `..`, the same
+ * thing `realpath --relative-to` produces, so the answer is available wherever
+ * a root is known. The root itself is `.`.
  */
 export function relativeToRoot(path: string, root: string | undefined): string | undefined {
   if (root === undefined) return undefined;
-  const base = trimTrailingSlashes(root);
-  const target = trimTrailingSlashes(path);
-  if (target === base) return ".";
-  return target.startsWith(base === "/" ? "/" : `${base}/`) ? target.slice(base === "/" ? 1 : base.length + 1) : undefined;
+  const from = segments(trimTrailingSlashes(root));
+  const to = segments(trimTrailingSlashes(path));
+  let common = 0;
+  while (common < from.length && common < to.length && from[common] === to[common]) common += 1;
+  const up = from.slice(common).map(() => "..");
+  const rest = to.slice(common);
+  return [...up, ...rest].join("/") || ".";
+}
+
+function segments(path: string): string[] {
+  return path.split("/").filter((part) => part !== "");
 }
 
 function trimTrailingSlashes(path: string): string {

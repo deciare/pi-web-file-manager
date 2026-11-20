@@ -50,8 +50,12 @@ test("expresses a path relative to a workspace root", () => {
   assert.equal(relativeToRoot("/data/home/src/a/b", "/data/home/src"), "a/b");
   assert.equal(relativeToRoot("/data/home/src", "/data/home/src"), ".");
   assert.equal(relativeToRoot("/data/home/src/", "/data/home/src/"), ".");
-  assert.equal(relativeToRoot("/etc/hosts", "/data/home/src"), undefined);
-  assert.equal(relativeToRoot("/data/home/srcX/file", "/data/home/src"), undefined);
+  assert.equal(relativeToRoot("/etc/hosts", "/data/home/src"), "../../../etc/hosts");
+  assert.equal(relativeToRoot("/data/home/srcX/file", "/data/home/src"), "../srcX/file");
+  assert.equal(relativeToRoot("/data/home", "/data/home/src"), "..");
+  assert.equal(relativeToRoot("/data/home/src/a", "/data/home/src/a/b"), "..");
+  assert.equal(relativeToRoot("/data/home/src/a/c", "/data/home/src/a/b"), "../c");
+  assert.equal(relativeToRoot("/", "/data/home/src"), "../../..");
   assert.equal(relativeToRoot("/anything", "/"), "anything");
   assert.equal(relativeToRoot("/", "/"), ".");
   assert.equal(relativeToRoot("/etc/hosts", undefined), undefined);
