@@ -65,7 +65,7 @@ interface MenuState {
 export class FileManagerPanel extends LitElement {
   static override styles = css`
     :host { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--pi-text); background: var(--pi-bg); font-size: 13px; }
-    .toolbar { gap: 8px; padding-inline: 8px; border-bottom: 1px solid var(--pi-border-muted); }
+    .toolbar { gap: 8px; border-bottom: 1px solid var(--pi-border-muted); }
     .breadcrumbs { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 2px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; cursor: text; align-self: stretch; }
     .crumb { flex: 0 0 auto; border: 0; border-radius: 6px; background: none; color: var(--pi-muted); padding: 3px 5px; font: inherit; font-family: var(--pi-mono, ui-monospace, monospace); cursor: pointer; }
     .crumb:hover { background: var(--pi-surface); color: var(--pi-text); }
@@ -76,7 +76,7 @@ export class FileManagerPanel extends LitElement {
     .list { overflow: auto; min-height: 0; border-bottom: 1px solid var(--pi-border); }
     .row-wrap { position: relative; }
     .row-wrap .ui-button.ui-file-row { width: 100%; padding-inline-end: 34px; }
-    .row-more { position: absolute; inset-inline-end: 2px; top: 50%; transform: translateY(-50%); opacity: 0; }
+    .row-more { position: absolute; inset-inline-end: 0; top: 50%; transform: translateY(-50%); opacity: 0; }
     .row-wrap:hover .row-more, .row-more:focus-visible, .row-wrap.menu-open .row-more { opacity: 1; }
     @media (pointer: coarse) { .row-more { opacity: 1; } }
     .viewer { display: flex; flex-direction: column; min-height: 0; }
@@ -129,6 +129,7 @@ export class FileManagerPanel extends LitElement {
   #preview: Preview | undefined;
   #controller: AbortController | undefined;
   #key: string | undefined;
+  #scopeSignature: string | undefined;
   #startScheduled = false;
   #editing = false;
   #draft = "";
@@ -216,6 +217,23 @@ export class FileManagerPanel extends LitElement {
   }
 
   async #start(): Promise<void> {
+    const snapshot = this.#selectionService?.getSnapshot();
+    const key = keyFor(this.#context, snapshot);
+    // Identity of everything this panel's data depends on. The host assigns a
+    // fresh context object whenever it re-renders, and a responsive layout
+    // change can assign several: treating each as a new scope re-listed the
+    // directory repeatedly and flickered the toolbar and list.
+    const scope = [this.#context?.machine.id ?? "", this.#context?.workspace?.id ?? ""].join("|");
+    if (this.#client !== undefined && scope === this.#scopeSignature) {
+      // Same machine and workspace: the selection service already keeps the
+      // directory in step, so only the remembered identity changes here.
+      // Re-initialising on every context assignment is what made the panel
+      // flicker when the host re-rendered it.
+      this.#key = key;
+      this.#ensureSubscription();
+      return;
+    }
+    this.#scopeSignature = scope;
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     this.#controller?.abort();
@@ -228,12 +246,16 @@ export class FileManagerPanel extends LitElement {
       this.requestUpdate();
       return;
     }
-    const snapshot = this.#selectionService?.getSnapshot();
-    this.#key = keyFor(this.#context, snapshot);
+    this.#key = key;
     await this.#openFor(this.#key, snapshot);
-    if (this.#selectionService !== undefined) {
-      this.#unsubscribe = this.#selectionService.subscribe((next) => { this.#onSelectionChanged(next); });
-    }
+    this.#ensureSubscription();
+  }
+
+  /** Subscribe once per connected panel; disconnection releases the listener. */
+  #ensureSubscription(): void {
+    const selection = this.#selectionService;
+    if (selection === undefined || this.#unsubscribe !== undefined) return;
+    this.#unsubscribe = selection.subscribe((next) => { this.#onSelectionChanged(next); });
   }
 
   #onSelectionChanged(snapshot: SelectionSnapshot): void {
@@ -243,10 +265,15 @@ export class FileManagerPanel extends LitElement {
     void this.#openFor(key, snapshot);
   }
 
-  async #openFor(key: string | undefined, snapshot: SelectionSnapshot | undefined): Promise<void> {
+  /** The directory a session or workspace should open at. */
+  #targetFor(key: string | undefined, snapshot: SelectionSnapshot | undefined): string {
     const remembered = key === undefined ? undefined : rememberedDirectories.get(key);
     const workspacePath = snapshot?.selectedWorkspace?.path ?? this.#context?.workspace?.path;
-    await this.#openDirectory(remembered ?? workspacePath ?? "~");
+    return remembered ?? workspacePath ?? "~";
+  }
+
+  async #openFor(key: string | undefined, snapshot: SelectionSnapshot | undefined): Promise<void> {
+    await this.#openDirectory(this.#targetFor(key, snapshot));
   }
 
   async #openDirectory(path: string): Promise<void> {
@@ -595,8 +622,13 @@ export class FileManagerPanel extends LitElement {
       ${index === 0 ? "" : html`<span class="separator" aria-hidden="true">/</span>`}
       <button
         class=${`crumb ${index === all.length - 1 ? "current" : ""}`}
-        title=${segment.path}
-        @click=${() => void this.#openDirectory(segment.path)}
+        title=${index === all.length - 1 ? "Edit path" : segment.path}
+        @click=${() => {
+          // The last segment is the directory already shown, so it is the
+          // natural target for editing rather than navigating to itself.
+          if (index === all.length - 1) this.#startEditingPath();
+          else void this.#openDirectory(segment.path);
+        }}
       >${segment.name}</button>
     `);
   }
