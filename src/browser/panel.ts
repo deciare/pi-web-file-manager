@@ -24,6 +24,9 @@ import {
 
 export const PANEL_TAG = "pi-web-file-manager-panel";
 
+/** How long a selection burst is allowed to settle before the panel acts on it. */
+const RECONCILE_DELAY_MS = 120;
+
 export function defineFileManagerPanel(): void {
   defineFileTypeIcon();
   if (customElements.get(PANEL_TAG) === undefined) customElements.define(PANEL_TAG, FileManagerPanel);
@@ -129,7 +132,9 @@ export class FileManagerPanel extends LitElement {
   #preview: Preview | undefined;
   #controller: AbortController | undefined;
   #key: string | undefined;
-  #scopeSignature: string | undefined;
+  #machineScope: string | undefined;
+  #pendingReconcile: ReturnType<typeof setTimeout> | undefined;
+  #workspaceId = "";
   #startScheduled = false;
   #editing = false;
   #draft = "";
@@ -174,6 +179,7 @@ export class FileManagerPanel extends LitElement {
 
   override disconnectedCallback(): void {
     document.removeEventListener("pointerdown", this.#onDocumentPointerDown, true);
+    if (this.#pendingReconcile !== undefined) { clearTimeout(this.#pendingReconcile); this.#pendingReconcile = undefined; }
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     this.#unsubscribeIcons?.();
@@ -217,28 +223,22 @@ export class FileManagerPanel extends LitElement {
   }
 
   async #start(): Promise<void> {
-    const snapshot = this.#selectionService?.getSnapshot();
-    const key = keyFor(this.#context, snapshot);
-    // Identity of everything this panel's data depends on. The host assigns a
-    // fresh context object whenever it re-renders, and a responsive layout
-    // change can assign several: treating each as a new scope re-listed the
-    // directory repeatedly and flickered the toolbar and list.
-    const scope = [this.#context?.machine.id ?? "", this.#context?.workspace?.id ?? ""].join("|");
-    if (this.#client !== undefined && scope === this.#scopeSignature) {
-      // Same machine and workspace: the selection service already keeps the
-      // directory in step, so only the remembered identity changes here.
-      // Re-initialising on every context assignment is what made the panel
-      // flicker when the host re-rendered it.
-      this.#key = key;
+    // The client is machine-scoped, and a workspace or session change is
+    // handled by the selection subscription. Re-initialising here on every
+    // context assignment — which the host makes on each render, and several
+    // times during a responsive layout change — aborted the current listing and
+    // started another, flickering the toolbar and the list.
+    const machine = this.#context?.machine.id ?? "";
+    if (this.#client !== undefined && machine === this.#machineScope) {
       this.#ensureSubscription();
+      this.#onSelectionChanged();
       return;
     }
-    this.#scopeSignature = scope;
+    this.#machineScope = machine;
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     this.#controller?.abort();
     this.#client = undefined;
-    this.#directory = undefined;
     try {
       this.#client = this.#context === undefined ? undefined : clientFor(this.#context);
     } catch (error) {
@@ -246,8 +246,21 @@ export class FileManagerPanel extends LitElement {
       this.requestUpdate();
       return;
     }
-    this.#key = key;
-    await this.#openFor(this.#key, snapshot);
+    const snapshot = this.#selectionService?.getSnapshot();
+    const workspace = this.#context?.workspace;
+    if (snapshot !== undefined && hasSelection(snapshot) && selectionMatchesContext(this.#context, snapshot)) {
+      this.#workspaceId = snapshot.selectedWorkspace?.id ?? "";
+      this.#key = keyFor(this.#context, snapshot);
+      await this.#openFor(this.#key, snapshot);
+    } else if (workspace !== undefined) {
+      // A panel with a workspace opens at that workspace, even if the selection
+      // service has not caught up yet.
+      this.#workspaceId = workspace.id;
+      this.#key = `workspace:${workspace.id}`;
+      await this.#openDirectory(workspace.path, false);
+    } else {
+      await this.#openDirectory("~", false);
+    }
     this.#ensureSubscription();
   }
 
@@ -255,14 +268,38 @@ export class FileManagerPanel extends LitElement {
   #ensureSubscription(): void {
     const selection = this.#selectionService;
     if (selection === undefined || this.#unsubscribe !== undefined) return;
-    this.#unsubscribe = selection.subscribe((next) => { this.#onSelectionChanged(next); });
+    this.#unsubscribe = selection.subscribe(() => { this.#onSelectionChanged(); });
   }
 
-  #onSelectionChanged(snapshot: SelectionSnapshot): void {
+  /**
+   * Selection arrives in bursts: switching projects clears the workspace and
+   * session, then restores them, and the panel's context can briefly describe
+   * the project that was left. Acting on each step opened several directories
+   * in a row and wrote the wrong one into a session's memory. The burst is
+   * collapsed by scheduling one reconciliation and reading the state at the
+   * moment it runs.
+   */
+  #onSelectionChanged(): void {
+    if (this.#pendingReconcile !== undefined) clearTimeout(this.#pendingReconcile);
+    this.#pendingReconcile = setTimeout(() => {
+      this.#pendingReconcile = undefined;
+      this.#reconcileSelection();
+    }, RECONCILE_DELAY_MS);
+  }
+
+  #reconcileSelection(): void {
+    const snapshot = this.#selectionService?.getSnapshot();
+    if (snapshot === undefined || !hasSelection(snapshot) || !selectionMatchesContext(this.#context, snapshot)) return;
     const key = keyFor(this.#context, snapshot);
     if (key === this.#key) return;
+    const target = this.#targetFor(key, snapshot);
+    if (this.#directory !== undefined && this.#key !== undefined) {
+      rememberedDirectories.set(this.#key, this.#directory);
+    }
     this.#key = key;
+    this.#workspaceId = snapshot.selectedWorkspace?.id ?? "";
     void this.#openFor(key, snapshot);
+    if (target === this.#directory) this.requestUpdate();
   }
 
   /** The directory a session or workspace should open at. */
@@ -273,10 +310,14 @@ export class FileManagerPanel extends LitElement {
   }
 
   async #openFor(key: string | undefined, snapshot: SelectionSnapshot | undefined): Promise<void> {
-    await this.#openDirectory(this.#targetFor(key, snapshot));
+    const target = this.#targetFor(key, snapshot);
+    // Re-opening the directory already on screen would only cost a request and
+    // a redraw, and the selection can arrive in more than one step.
+    if (target === this.#directory) return;
+    await this.#openDirectory(target, false);
   }
 
-  async #openDirectory(path: string): Promise<void> {
+  async #openDirectory(path: string, remember = true): Promise<void> {
     const client = this.#client;
     if (client === undefined) return;
     this.#controller?.abort();
@@ -300,7 +341,10 @@ export class FileManagerPanel extends LitElement {
     this.#entries = [...result.data.entries];
     this.#total = result.data.total;
     this.#truncated = result.data.truncated;
-    if (this.#key !== undefined) rememberedDirectories.set(this.#key, result.data.path);
+    // Only navigation the user asked for updates the memory. A listing opened
+    // while the selection was settling is not somewhere they chose to be, and
+    // recording it would overwrite the directory they actually left behind.
+    if (remember && this.#key !== undefined) rememberedDirectories.set(this.#key, result.data.path);
     this.requestUpdate();
   }
 
@@ -851,6 +895,24 @@ export class FileManagerPanel extends LitElement {
     }
     return html`${head}<div class="notice">No preview.</div>`;
   }
+}
+
+function hasSelection(snapshot: SelectionSnapshot | undefined): snapshot is SelectionSnapshot & { selectedWorkspace?: SelectionSnapshot["selectedWorkspace"] } {
+  return snapshot !== undefined && (snapshot.selectedWorkspace !== undefined || snapshot.selectedSession !== undefined);
+}
+
+/**
+ * A selection belongs to this panel when it names the same workspace, and when
+ * the selected session is working in it. The host moves through intermediate
+ * states the panel must not act on: no workspace at all, or the previous
+ * project's session still selected while the new workspace is already set.
+ */
+function selectionMatchesContext(context: PanelContext | undefined, snapshot: SelectionSnapshot): boolean {
+  const workspace = context?.workspace;
+  if (workspace === undefined) return true;
+  if (snapshot.selectedWorkspace !== undefined && snapshot.selectedWorkspace.id !== workspace.id) return false;
+  const cwd = snapshot.selectedSession?.cwd;
+  return cwd === undefined || cwd === workspace.path;
 }
 
 function keyFor(context: PanelContext | undefined, snapshot: SelectionSnapshot | undefined): string | undefined {
