@@ -29,7 +29,8 @@ Parity with a terminal is the goal, but four things stay true regardless:
 
 A no-workspace **application panel**, so it is available with or without a project selected, and follows the selected machine. Title "File manager"; local contribution id `files`.
 
-- Breadcrumb with a root switcher: Home, `/`, the selected workspace, and recent paths. Typed absolute path ("go to path") accepts `~` and relative-to-home forms.
+- Breadcrumbs double as an address bar: each segment navigates, and clicking the last one turns it into a text field holding the full path. There is no root switcher — every path is reachable, so shortcuts would only be a second, worse address bar. A `..` row opens the listing, which makes the parent reachable without a dedicated control.
+- Icons and row styling come from the host, not from copies: the `file-icons` capability resolves each path through the user's chosen file-icon theme, and `stylesheet-integration` adopts the shared UI sheet, so rows are the same 32 px `ui-file-row` the bundled panels use.
 - List rows with a per-row menu (open, download, copy path, rename, delete) and a folder-level menu (new folder, new file, upload, download as zip, show hidden files).
 - Split view: list above, viewer/editor below, with a full-height toggle. Chosen over left/right because a side-by-side split is unusable on mobile.
 - Soft-wrap is a single global toggle persisted per browser, applied identically to raw and highlighted views. The split state is persisted the same way. There is no per-file state.
