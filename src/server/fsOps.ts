@@ -167,6 +167,9 @@ export async function renamePath(input: RenameRequest): Promise<RenameResponse> 
   refuseRoot(from, "rename");
   refuseRoot(to, "rename");
   if (from === to) throw invalid("Source and destination are the same path", from);
+  // A directory cannot become its own descendant; the OS refuses this too, with
+  // an errno that says nothing to a reader.
+  if (to.startsWith(`${from}/`)) throw invalid("Cannot move a folder into itself", to);
 
   const destination = await lstat(to).catch((error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? undefined : Promise.reject(error)));
   if (destination !== undefined && input.overwrite !== true) {

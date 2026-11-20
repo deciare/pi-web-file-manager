@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   deletePath, listDirectory, makeDirectory, planDelete, readTextFile, renamePath, statPath,
 } from "../src/server/fsOps.ts";
@@ -284,3 +285,13 @@ async function waitForGone(path: string): Promise<void> {
   }
   throw new Error(`${path} was not swept`);
 }
+
+test("refuses to move a folder into its own subtree", async () => {
+  const box = await sandbox();
+  const outer = box.path("outer");
+  await mkdir(join(outer, "inner"), { recursive: true });
+  await assert.rejects(
+    () => renamePath({ from: outer, to: join(outer, "inner/outer") }),
+    (error: unknown) => error instanceof Failure && error.code === "EINVAL",
+  );
+});

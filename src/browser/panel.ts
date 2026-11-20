@@ -56,7 +56,18 @@ type DialogState =
   | { readonly kind: "newFile"; readonly draft: string; readonly error?: string }
   | { readonly kind: "rename"; readonly entry: FileEntry; readonly draft: string; readonly error?: string }
   | { readonly kind: "delete"; readonly entry: FileEntry; readonly plan: DeletePlan; readonly error?: string }
-  | { readonly kind: "replace"; readonly file: File; readonly error?: string };
+  | { readonly kind: "replace"; readonly file: File; readonly error?: string }
+  | {
+    readonly kind: "move";
+    readonly entry: FileEntry;
+    /** The folder being browsed as the destination. */
+    readonly directory: string;
+    /** Undefined while the folder is loading. */
+    readonly directories?: FileEntry[] | undefined;
+    readonly error?: string | undefined;
+    /** The destination name is taken; offer to replace instead of refusing. */
+    readonly canReplace?: boolean | undefined;
+  };
 
 interface MenuState {
   readonly x: number;
@@ -114,6 +125,12 @@ export class FileManagerPanel extends LitElement {
     dialog.dialog button { font: inherit; border-radius: 6px; border: 1px solid var(--pi-border); background: var(--pi-surface); color: var(--pi-text); padding: 6px 12px; cursor: pointer; }
     dialog.dialog button.primary { border-color: var(--pi-accent); background: var(--pi-accent); color: var(--pi-accent-contrast, #06121a); }
     dialog.dialog button.danger { border-color: var(--pi-danger); background: var(--pi-danger); color: #fff; }
+    dialog.dialog.move-dialog { width: min(480px, calc(100vw - 32px)); }
+    .move-path { margin: 0 0 8px; color: var(--pi-muted); font: 12px var(--pi-mono, ui-monospace, monospace); overflow-wrap: anywhere; }
+    .move-list { max-height: min(320px, 45vh); overflow-y: auto; border: 1px solid var(--pi-border-muted); border-radius: 8px; }
+    dialog.dialog .move-row { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; border-radius: 0; background: none; color: var(--pi-text); padding: 7px 9px; text-align: start; }
+    dialog.dialog .move-row:hover, dialog.dialog .move-row:focus-visible { background: var(--pi-surface-hover, var(--pi-surface)); outline: none; }
+    .move-hint { margin: 8px 0 0; color: var(--pi-muted); }
     .status-stack { position: absolute; inset-inline-end: 10px; bottom: 10px; z-index: 20; display: grid; gap: 6px; justify-items: end; pointer-events: none; }
     .status { max-width: min(420px, 80%); border: 1px solid var(--pi-border-muted); border-radius: 8px; background: var(--pi-bg-overlay, var(--pi-surface)); box-shadow: 0 6px 18px var(--pi-shadow, rgba(0, 0, 0, 0.35)); color: var(--pi-text); padding: 5px 10px; font-size: 12px; }
   `;
@@ -539,6 +556,48 @@ export class FileManagerPanel extends LitElement {
     anchor.click();
   }
 
+  #askMove(entry: FileEntry): void {
+    this.#closeMenu();
+    const directory = parentPath(entry.path);
+    this.#dialog = { kind: "move", entry, directory };
+    this.requestUpdate();
+    void this.#loadMoveDirectory(directory);
+  }
+
+  /** Browse the destination folder inside the move dialog. */
+  async #loadMoveDirectory(directory: string): Promise<void> {
+    const client = this.#client;
+    if (client === undefined) return;
+    const dialog = this.#dialog;
+    if (dialog?.kind !== "move") return;
+    this.#dialog = { ...dialog, directory, directories: undefined, error: undefined, canReplace: false };
+    this.requestUpdate();
+    const result = await client.list(directory);
+    const current = this.#dialog;
+    if (current?.kind !== "move" || current.directory !== directory) return;
+    this.#dialog = result.ok
+      ? { ...current, directories: result.data.entries.filter((item) => item.kind === "directory" || item.linkKind === "directory") }
+      : { ...current, directories: [], error: result.error.message };
+    this.requestUpdate();
+  }
+
+  async #submitMove(overwrite = false): Promise<void> {
+    const dialog = this.#dialog;
+    const client = this.#client;
+    if (dialog?.kind !== "move" || client === undefined) return;
+    const target = joinPath(dialog.directory, dialog.entry.name);
+    const result = await client.rename(dialog.entry.path, target, overwrite);
+    if (result.ok === false) {
+      this.#dialog = { ...dialog, error: result.error.message, canReplace: result.error.code === "EEXIST" };
+      this.requestUpdate();
+      return;
+    }
+    this.#dialog = undefined;
+    this.#setStatus(`Moved ${dialog.entry.name}`);
+    if (this.#preview?.entry.path === dialog.entry.path) this.#preview = undefined;
+    await this.#refresh();
+  }
+
   async #submitName(): Promise<void> {
     const dialog = this.#dialog;
     const client = this.#client;
@@ -760,6 +819,7 @@ export class FileManagerPanel extends LitElement {
             ${this.#relativePath(entry.path) === undefined ? "" : this.#menuItem("Copy relative path", () => this.#copyRelativePath(entry))}
             <hr>
             ${this.#menuItem("Rename…", () => this.#askRename(entry))}
+            ${this.#menuItem("Move to…", () => this.#askMove(entry))}
             ${this.#menuItem("Delete…", () => void this.#askDelete(entry), "danger")}
           `}
       </div>
@@ -784,6 +844,7 @@ export class FileManagerPanel extends LitElement {
         </dialog>
       `;
     }
+    if (dialog.kind === "move") return this.#renderMoveDialog(dialog);
     if (dialog.kind === "replace") {
       return html`
         <dialog class="dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
@@ -818,6 +879,49 @@ export class FileManagerPanel extends LitElement {
         <footer>
           <button @click=${() => this.#cancelDialog()}>Cancel</button>
           <button class="primary" @click=${() => void this.#submitName()}>${action}</button>
+        </footer>
+      </dialog>
+    `;
+  }
+
+  /**
+   * The destination picker: same list-of-choices shape as moving a session
+   * between workspaces, because that is the metaphor the rest of the app uses
+   * for "this thing belongs somewhere else now".
+   */
+  #renderMoveDialog(dialog: Extract<DialogState, { kind: "move" }>) {
+    const parent = parentPath(dialog.entry.path);
+    const insideItself = dialog.entry.kind === "directory"
+      && (dialog.directory === dialog.entry.path || dialog.directory.startsWith(`${dialog.entry.path}/`));
+    const alreadyHere = dialog.directory === parent;
+    const blocked = dialog.directories === undefined || insideItself || alreadyHere;
+    return html`
+      <dialog class="dialog move-dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
+        <h2>Move ${dialog.entry.name}</h2>
+        <p class="move-path" dir="ltr">${dialog.directory}</p>
+        <div class="move-list">
+          ${dialog.directory === "/" ? "" : html`
+            <button class="move-row" @click=${() => void this.#loadMoveDirectory(parentPath(dialog.directory))}>
+              <span class="leading" aria-hidden="true">↰</span>..
+            </button>
+          `}
+          ${dialog.directories === undefined
+            ? html`<div class="notice" role="status">Loading folders…</div>`
+            : dialog.directories.length === 0
+              ? html`<div class="notice">No folders in here</div>`
+              : dialog.directories.map((child) => html`
+                <button class="move-row" @click=${() => void this.#loadMoveDirectory(child.path)}>
+                  <span class="leading" aria-hidden="true">${folderIcon()}</span>${child.name}
+                </button>
+              `)}
+        </div>
+        ${insideItself ? html`<p class="move-hint">A folder cannot move into itself.</p>` : alreadyHere ? html`<p class="move-hint">Already in this folder.</p>` : ""}
+        ${dialog.error === undefined ? "" : html`<p class="dialog-error">${dialog.error}</p>`}
+        <footer>
+          <button @click=${() => this.#cancelDialog()}>Cancel</button>
+          ${dialog.canReplace === true
+            ? html`<button class="danger" @click=${() => void this.#submitMove(true)}>Replace</button>`
+            : html`<button class="primary" ?disabled=${blocked} @click=${() => void this.#submitMove()}>Move here</button>`}
         </footer>
       </dialog>
     `;
