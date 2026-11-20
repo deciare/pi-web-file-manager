@@ -53,6 +53,23 @@ export function parentPath(path: string): string {
   return trimmed.slice(0, index);
 }
 
+/**
+ * The path as it reads from `root`, or undefined when it is outside it. Used for
+ * "copy relative path", where the useful form is the one a command in the
+ * workspace root would accept. The root itself is `.`.
+ */
+export function relativeToRoot(path: string, root: string | undefined): string | undefined {
+  if (root === undefined) return undefined;
+  const base = trimTrailingSlashes(root);
+  const target = trimTrailingSlashes(path);
+  if (target === base) return ".";
+  return target.startsWith(base === "/" ? "/" : `${base}/`) ? target.slice(base === "/" ? 1 : base.length + 1) : undefined;
+}
+
+function trimTrailingSlashes(path: string): string {
+  return path.length > 1 ? path.replace(/\/+$/u, "") : path;
+}
+
 export function baseName(path: string): string {
   const trimmed = path.replace(/\/+$/u, "");
   const index = trimmed.lastIndexOf("/");

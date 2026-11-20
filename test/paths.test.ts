@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { absolutePath, expandHome, isRootPath, refuseRoot, singleName } from "../src/server/paths.ts";
+import { relativeToRoot } from "../src/browser/breadcrumbs.ts";
 import { Failure } from "../src/server/failure.ts";
 
 test("expands ~ and requires an absolute path", () => {
@@ -42,4 +43,16 @@ test("the filesystem root is recognised however it is written", () => {
   assert.equal(isRootPath("/home"), false);
   assert.throws(() => refuseRoot("/", "delete"), Failure);
   assert.doesNotThrow(() => refuseRoot("/home", "delete"));
+});
+
+test("expresses a path relative to a workspace root", () => {
+  assert.equal(relativeToRoot("/data/home/src/AGENTS.md", "/data/home/src"), "AGENTS.md");
+  assert.equal(relativeToRoot("/data/home/src/a/b", "/data/home/src"), "a/b");
+  assert.equal(relativeToRoot("/data/home/src", "/data/home/src"), ".");
+  assert.equal(relativeToRoot("/data/home/src/", "/data/home/src/"), ".");
+  assert.equal(relativeToRoot("/etc/hosts", "/data/home/src"), undefined);
+  assert.equal(relativeToRoot("/data/home/srcX/file", "/data/home/src"), undefined);
+  assert.equal(relativeToRoot("/anything", "/"), "anything");
+  assert.equal(relativeToRoot("/", "/"), ".");
+  assert.equal(relativeToRoot("/etc/hosts", undefined), undefined);
 });

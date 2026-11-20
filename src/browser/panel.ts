@@ -5,7 +5,7 @@ import { clientFor, fromBase64, type FileManagerClient } from "./client.ts";
 import { hostCapabilities } from "./capabilities.ts";
 import { defineFileTypeIcon, folderIcon, resolveIcon } from "./fileIcon.ts";
 import {
-  baseName, breadcrumbSegments, formatSize, isHiddenName, joinPath, parentPath, resolveAddress,
+  baseName, breadcrumbSegments, formatSize, isHiddenName, joinPath, parentPath, relativeToRoot, resolveAddress,
 } from "./breadcrumbs.ts";
 
 /**
@@ -138,6 +138,8 @@ export class FileManagerPanel extends LitElement {
   #machineScope: string | undefined;
   #pendingReconcile: ReturnType<typeof setTimeout> | undefined;
   #workspaceId = "";
+  /** The root that "relative" is measured from: the workspace the panel is in. */
+  #workspaceRoot: string | undefined;
   #startScheduled = false;
   #editing = false;
   #draft = "";
@@ -253,12 +255,14 @@ export class FileManagerPanel extends LitElement {
     const workspace = this.#context?.workspace;
     if (snapshot !== undefined && hasSelection(snapshot) && selectionMatchesContext(this.#context, snapshot)) {
       this.#workspaceId = snapshot.selectedWorkspace?.id ?? "";
+      this.#workspaceRoot = this.#context?.workspace?.path ?? snapshot.selectedWorkspace?.path ?? snapshot.selectedSession?.cwd;
       this.#key = keyFor(this.#context, snapshot);
       await this.#openFor(this.#key, snapshot);
     } else if (workspace !== undefined) {
       // A panel with a workspace opens at that workspace, even if the selection
       // service has not caught up yet.
       this.#workspaceId = workspace.id;
+      this.#workspaceRoot = workspace.path;
       this.#key = `workspace:${workspace.id}`;
       await this.#openDirectory(workspace.path, false);
     } else {
@@ -301,6 +305,7 @@ export class FileManagerPanel extends LitElement {
     }
     this.#key = key;
     this.#workspaceId = snapshot.selectedWorkspace?.id ?? "";
+    this.#workspaceRoot = this.#context?.workspace?.path ?? snapshot.selectedWorkspace?.path ?? snapshot.selectedSession?.cwd;
     void this.#openFor(key, snapshot);
     if (target === this.#directory) this.requestUpdate();
   }
@@ -498,9 +503,27 @@ export class FileManagerPanel extends LitElement {
 
   #copyPath(entry: FileEntry): void {
     this.#closeMenu();
-    // No feedback: a copy is self-evident when the text appears, and anything
-    // that appears and vanishes here would move the list under the pointer.
-    void navigator.clipboard?.writeText(entry.path);
+    this.#copyText(entry.path);
+  }
+
+  #copyRelativePath(entry: FileEntry): void {
+    const relative = this.#relativePath(entry.path);
+    if (relative === undefined) return;
+    this.#closeMenu();
+    this.#copyText(relative);
+  }
+
+  /**
+   * No feedback: a copy is self-evident when the text appears, and anything
+   * that appears and vanishes here would move the list under the pointer.
+   */
+  #copyText(text: string): void {
+    void navigator.clipboard?.writeText(text);
+  }
+
+  /** The path as it reads from the workspace root, or nothing outside it. */
+  #relativePath(path: string): string | undefined {
+    return relativeToRoot(path, this.#workspaceRoot);
   }
 
   #downloadDirectory(): void {
@@ -735,6 +758,7 @@ export class FileManagerPanel extends LitElement {
             ${this.#menuItem("Open", () => { this.#closeMenu(); void this.#openEntry(entry); })}
             ${this.#menuItem(entry.kind === "directory" ? "Download as .zip" : "Download", () => { this.#closeMenu(); this.#downloadEntry(entry); })}
             ${this.#menuItem("Copy path", () => this.#copyPath(entry))}
+            ${this.#relativePath(entry.path) === undefined ? "" : this.#menuItem("Copy relative path", () => this.#copyRelativePath(entry))}
             <hr>
             ${this.#menuItem("Rename…", () => this.#askRename(entry))}
             ${this.#menuItem("Delete…", () => void this.#askDelete(entry), "danger")}
@@ -885,7 +909,8 @@ export class FileManagerPanel extends LitElement {
         <div class="viewer-actions">
           <small>${formatSize(preview.entry.size)}</small>
           ${downloadUrl === undefined ? "" : html`<a class="viewer-action" href=${downloadUrl} download=${preview.entry.name}>Download</a>`}
-          <button class="viewer-action" @click=${() => void navigator.clipboard?.writeText(preview.entry.path)}>Copy path</button>
+          <button class="viewer-action" @click=${() => this.#copyText(preview.entry.path)}>Copy path</button>
+          ${this.#relativePath(preview.entry.path) === undefined ? "" : html`<button class="viewer-action" @click=${() => this.#copyText(this.#relativePath(preview.entry.path) ?? "")}>Copy relative path</button>`}
         </div>
       </div>`;
     if (preview.error !== undefined) return html`${head}<div class="notice error">${preview.error}</div>`;
