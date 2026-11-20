@@ -1,0 +1,4 @@
+node_modules/
+browser/
+server-plugin.js
+*.log
