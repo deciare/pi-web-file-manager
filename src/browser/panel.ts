@@ -4,20 +4,22 @@ import type { PanelContext, SelectionService, SelectionSnapshot } from "./plugin
 import { clientFor, fromBase64, type FileManagerClient } from "./client.ts";
 import { hostCapabilities } from "./capabilities.ts";
 import { defineFileTypeIcon, folderIcon, resolveIcon } from "./fileIcon.ts";
-import { breadcrumbSegments, formatSize, resolveAddress } from "./breadcrumbs.ts";
+import {
+  baseName, breadcrumbSegments, formatSize, isHiddenName, joinPath, parentPath, resolveAddress,
+} from "./breadcrumbs.ts";
 
 /**
  * The browse panel.
  *
  * The list is one vertically scrolling region rather than pages, opened by a
- * `..` row and by breadcrumbs that double as an address bar: clicking the last
- * segment turns it into a text field holding the full path. There is no root
+ * `..` row and by breadcrumbs that double as an address bar. There is no root
  * switcher — every path is reachable, so a list of shortcuts would only be a
  * second, worse address bar.
  *
  * Which directory was open is remembered per session in this page's memory
- * only, so switching sessions and coming back restores it, while a reload
- * starts again at the workspace root.
+ * only. That memory lives at module scope rather than on the element, because
+ * the host destroys this panel when another tab is selected: keeping it on the
+ * instance lost the directory every time Terminal was opened.
  */
 
 export const PANEL_TAG = "pi-web-file-manager-panel";
@@ -27,6 +29,11 @@ export function defineFileManagerPanel(): void {
   if (customElements.get(PANEL_TAG) === undefined) customElements.define(PANEL_TAG, FileManagerPanel);
 }
 
+/** Per-session directory, for the lifetime of this page. Not persisted. */
+const rememberedDirectories = new Map<string, string>();
+
+const HIDDEN_PREFERENCE_KEY = "pi-web.file-manager.show-hidden";
+
 interface Preview {
   readonly entry: FileEntry;
   readonly text?: string;
@@ -35,11 +42,31 @@ interface Preview {
   readonly error?: string;
 }
 
+interface DeletePlan {
+  readonly entries: number;
+  readonly bytes: number;
+  readonly truncated: boolean;
+}
+
+type DialogState =
+  | { readonly kind: "newFolder"; readonly draft: string; readonly error?: string }
+  | { readonly kind: "newFile"; readonly draft: string; readonly error?: string }
+  | { readonly kind: "rename"; readonly entry: FileEntry; readonly draft: string; readonly error?: string }
+  | { readonly kind: "delete"; readonly entry: FileEntry; readonly plan: DeletePlan; readonly error?: string }
+  | { readonly kind: "replace"; readonly file: File; readonly error?: string };
+
+interface MenuState {
+  readonly x: number;
+  readonly y: number;
+  /** Undefined for the toolbar menu, set for a row menu. */
+  readonly entry?: FileEntry;
+}
+
 export class FileManagerPanel extends LitElement {
   static override styles = css`
     :host { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--pi-text); background: var(--pi-bg); font-size: 13px; }
     .toolbar { gap: 8px; padding-inline: 8px; border-bottom: 1px solid var(--pi-border-muted); }
-    .breadcrumbs { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 2px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
+    .breadcrumbs { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 2px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; cursor: text; align-self: stretch; }
     .crumb { flex: 0 0 auto; border: 0; border-radius: 6px; background: none; color: var(--pi-muted); padding: 3px 5px; font: inherit; font-family: var(--pi-mono, ui-monospace, monospace); cursor: pointer; }
     .crumb:hover { background: var(--pi-surface); color: var(--pi-text); }
     .crumb.current { color: var(--pi-text); }
@@ -47,6 +74,10 @@ export class FileManagerPanel extends LitElement {
     .address { flex: 1 1 auto; min-width: 0; box-sizing: border-box; border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-surface); color: var(--pi-text); padding: 4px 7px; font: inherit; font-family: var(--pi-mono, ui-monospace, monospace); direction: ltr; }
     main { flex: 1; display: grid; grid-template-rows: minmax(160px, 34%) minmax(0, 1fr); min-height: 0; }
     .list { overflow: auto; min-height: 0; border-bottom: 1px solid var(--pi-border); }
+    .row-wrap { position: relative; }
+    .row-wrap .ui-button.ui-file-row { width: 100%; padding-inline-end: 34px; }
+    .row-more { position: absolute; inset-inline-end: 2px; top: 50%; transform: translateY(-50%); opacity: 0; }
+    .row-wrap:hover .row-more, .row-more:focus-visible, .row-wrap.menu-open .row-more { opacity: 1; }
     .viewer { display: flex; flex-direction: column; min-height: 0; }
     .viewer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding-inline-start: 10px; border-bottom: 1px solid var(--pi-border-muted); }
     .viewer-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
@@ -62,11 +93,27 @@ export class FileManagerPanel extends LitElement {
     .error { color: var(--pi-danger); }
     .truncated { padding: 6px 10px; color: var(--pi-dim); }
     .leading { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; color: var(--pi-muted); }
+    .menu { position: fixed; z-index: 40; min-width: 190px; padding: 4px; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg-overlay, var(--pi-surface)); box-shadow: 0 10px 30px var(--pi-shadow, rgba(0, 0, 0, 0.4)); }
+    .menu button { display: block; width: 100%; border: 0; border-radius: 5px; background: none; color: var(--pi-text); padding: 7px 9px; text-align: start; font: inherit; cursor: pointer; }
+    .menu button:hover, .menu button:focus-visible { background: var(--pi-surface-hover, var(--pi-surface)); outline: none; }
+    .menu button.danger { color: var(--pi-danger); }
+    .menu hr { margin: 4px 2px; border: 0; border-top: 1px solid var(--pi-border-muted); }
+    dialog.dialog { box-sizing: border-box; width: min(420px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--pi-border); border-radius: 12px; background: var(--pi-bg); color: var(--pi-text); }
+    dialog.dialog h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+    dialog.dialog p { margin: 0 0 12px; color: var(--pi-muted); }
+    dialog.dialog input { box-sizing: border-box; width: 100%; border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; font: inherit; }
+    dialog.dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+    dialog.dialog .dialog-error { margin: 8px 0 0; color: var(--pi-danger); }
+    dialog.dialog button { font: inherit; border-radius: 6px; border: 1px solid var(--pi-border); background: var(--pi-surface); color: var(--pi-text); padding: 6px 12px; cursor: pointer; }
+    dialog.dialog button.primary { border-color: var(--pi-accent); background: var(--pi-accent); color: var(--pi-accent-contrast, #06121a); }
+    dialog.dialog button.danger { border-color: var(--pi-danger); background: var(--pi-danger); color: #fff; }
+    .status { padding: 4px 10px; border-bottom: 1px solid var(--pi-border-muted); color: var(--pi-muted); font-size: 12px; }
   `;
 
   #context: PanelContext | undefined;
   #selectionService: SelectionService | undefined;
   #unsubscribe: (() => void) | undefined;
+  #unsubscribeIcons: (() => void) | undefined;
   #client: FileManagerClient | undefined;
   #directory: string | undefined;
   #parent: string | null = null;
@@ -75,15 +122,18 @@ export class FileManagerPanel extends LitElement {
   #truncated = false;
   #loading = false;
   #error: string | undefined;
+  #status: string | undefined;
+  #statusTimer: ReturnType<typeof setTimeout> | undefined;
   #preview: Preview | undefined;
   #controller: AbortController | undefined;
   #key: string | undefined;
-  #remembered = new Map<string, string>();
   #startScheduled = false;
   #editing = false;
   #draft = "";
-
-  #unsubscribeIcons: (() => void) | undefined;
+  #menu: MenuState | undefined;
+  #dialog: DialogState | undefined;
+  #showHidden = readHiddenPreference();
+  #uploading: { readonly name: string; readonly received: number; readonly total: number } | undefined;
 
   constructor() {
     super();
@@ -115,10 +165,12 @@ export class FileManagerPanel extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    document.addEventListener("pointerdown", this.#onDocumentPointerDown, true);
     this.#scheduleStart();
   }
 
   override disconnectedCallback(): void {
+    document.removeEventListener("pointerdown", this.#onDocumentPointerDown, true);
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     this.#unsubscribeIcons?.();
@@ -129,14 +181,28 @@ export class FileManagerPanel extends LitElement {
   }
 
   override updated(): void {
-    if (!this.#editing) return;
     const input = this.renderRoot.querySelector<HTMLInputElement>(".address");
     const root = this.renderRoot as ShadowRoot;
     if (input !== null && root.activeElement !== input) {
       input.focus();
       input.select();
     }
+    const dialog = this.renderRoot.querySelector<HTMLDialogElement>("dialog.dialog");
+    if (this.#dialog !== undefined) {
+      if (dialog !== null && !dialog.open) dialog.showModal();
+    } else if (dialog?.open === true) {
+      dialog.close();
+    }
   }
+
+  readonly #onDocumentPointerDown = (event: Event): void => {
+    if (this.#menu === undefined) return;
+    const path = event.composedPath();
+    const menu = this.renderRoot.querySelector(".menu");
+    if (menu !== null && path.includes(menu)) return;
+    this.#menu = undefined;
+    this.requestUpdate();
+  };
 
   #scheduleStart(): void {
     if (!this.isConnected || this.#startScheduled) return;
@@ -171,13 +237,12 @@ export class FileManagerPanel extends LitElement {
   #onSelectionChanged(snapshot: SelectionSnapshot): void {
     const key = keyFor(this.#context, snapshot);
     if (key === this.#key) return;
-    if (this.#directory !== undefined && this.#key !== undefined) this.#remembered.set(this.#key, this.#directory);
     this.#key = key;
     void this.#openFor(key, snapshot);
   }
 
   async #openFor(key: string | undefined, snapshot: SelectionSnapshot | undefined): Promise<void> {
-    const remembered = key === undefined ? undefined : this.#remembered.get(key);
+    const remembered = key === undefined ? undefined : rememberedDirectories.get(key);
     const workspacePath = snapshot?.selectedWorkspace?.path ?? this.#context?.workspace?.path;
     await this.#openDirectory(remembered ?? workspacePath ?? "~");
   }
@@ -206,7 +271,12 @@ export class FileManagerPanel extends LitElement {
     this.#entries = [...result.data.entries];
     this.#total = result.data.total;
     this.#truncated = result.data.truncated;
+    if (this.#key !== undefined) rememberedDirectories.set(this.#key, result.data.path);
     this.requestUpdate();
+  }
+
+  async #refresh(): Promise<void> {
+    if (this.#directory !== undefined) await this.#openDirectory(this.#directory);
   }
 
   async #openEntry(entry: FileEntry): Promise<void> {
@@ -242,7 +312,37 @@ export class FileManagerPanel extends LitElement {
     this.requestUpdate();
   }
 
+  // ---- menus -------------------------------------------------------------
+
+  #openMenu(event: Event, entry?: FileEntry): void {
+    event.stopPropagation();
+    const anchor = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = Math.max(8, Math.min(anchor.left, window.innerWidth - 210));
+    const y = Math.min(anchor.bottom + 4, Math.max(8, window.innerHeight - 240));
+    this.#menu = entry === undefined ? { x, y } : { x, y, entry };
+    this.requestUpdate();
+  }
+
+  #closeMenu(): void {
+    this.#menu = undefined;
+    this.requestUpdate();
+  }
+
+  // ---- operations --------------------------------------------------------
+
+  /** A transient line under the toolbar; it clears itself so it cannot become furniture. */
+  #setStatus(text: string): void {
+    this.#status = text;
+    if (this.#statusTimer !== undefined) clearTimeout(this.#statusTimer);
+    this.#statusTimer = setTimeout(() => {
+      this.#status = undefined;
+      this.#statusTimer = undefined;
+      this.requestUpdate();
+    }, 6000);
+  }
+
   #startEditingPath(): void {
+    if (this.#editing) return;
     this.#editing = true;
     this.#draft = this.#directory ?? "";
     this.requestUpdate();
@@ -263,8 +363,212 @@ export class FileManagerPanel extends LitElement {
     this.requestUpdate();
   }
 
-  #renderBreadcrumbs() {
+  #askNewFolder(): void {
+    this.#closeMenu();
+    this.#dialog = { kind: "newFolder", draft: "" };
+    this.requestUpdate();
+  }
+
+  #askNewFile(): void {
+    this.#closeMenu();
+    this.#dialog = { kind: "newFile", draft: "" };
+    this.requestUpdate();
+  }
+
+  #askRename(entry: FileEntry): void {
+    this.#closeMenu();
+    this.#dialog = { kind: "rename", entry, draft: entry.name };
+    this.requestUpdate();
+  }
+
+  async #askDelete(entry: FileEntry): Promise<void> {
+    this.#closeMenu();
+    const client = this.#client;
+    if (client === undefined) return;
+    this.#dialog = { kind: "delete", entry, plan: { entries: 1, bytes: entry.size, truncated: false } };
+    this.requestUpdate();
+    const plan = await client.deletePlan(entry.path);
+    if (this.#dialog?.kind !== "delete" || this.#dialog.entry.path !== entry.path) return;
+    if (plan.ok === false) {
+      this.#dialog = { kind: "delete", entry, plan: { entries: 1, bytes: entry.size, truncated: false }, error: plan.error.message };
+    } else {
+      this.#dialog = { kind: "delete", entry, plan: plan.data };
+    }
+    this.requestUpdate();
+  }
+
+  #askUpload(): void {
+    this.#closeMenu();
+    this.renderRoot.querySelector<HTMLInputElement>("input[type=file]")?.click();
+  }
+
+  #toggleHidden(): void {
+    this.#showHidden = !this.#showHidden;
+    writeHiddenPreference(this.#showHidden);
+    this.#closeMenu();
+  }
+
+  #downloadEntry(entry: FileEntry): void {
+    const client = this.#client;
+    if (client === undefined) return;
+    const directory = entry.kind === "directory" || entry.linkKind === "directory";
+    const url = directory ? client.zipUrl(entry.path) : client.downloadUrl(entry.path);
+    if (url === undefined) return;
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = directory ? `${entry.name}.zip` : entry.name;
+    anchor.click();
+  }
+
+  #copyPath(entry: FileEntry): void {
+    this.#closeMenu();
+    void navigator.clipboard?.writeText(entry.path);
+    this.#setStatus(`Copied ${entry.path}`);
+    this.requestUpdate();
+  }
+
+  #downloadDirectory(): void {
+    this.#closeMenu();
     const directory = this.#directory;
+    const client = this.#client;
+    if (directory === undefined || client === undefined) return;
+    const url = client.zipUrl(directory);
+    if (url === undefined) return;
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${baseName(directory) || "root"}.zip`;
+    anchor.click();
+  }
+
+  async #submitName(): Promise<void> {
+    const dialog = this.#dialog;
+    const client = this.#client;
+    if (dialog === undefined || client === undefined) return;
+    if (dialog.kind !== "newFolder" && dialog.kind !== "newFile" && dialog.kind !== "rename") return;
+    const name = dialog.draft.trim();
+    if (name === "") {
+      this.#dialog = { ...dialog, error: "Enter a name" };
+      this.requestUpdate();
+      return;
+    }
+    if (name.includes("/")) {
+      this.#dialog = { ...dialog, error: "A name cannot contain a slash" };
+      this.requestUpdate();
+      return;
+    }
+    const directory = this.#directory ?? "/";
+
+    if (dialog.kind === "rename") {
+      const result = await client.rename(dialog.entry.path, joinPath(parentPath(dialog.entry.path), name), false);
+      if (result.ok === false) {
+        this.#dialog = { ...dialog, error: result.error.message };
+        this.requestUpdate();
+        return;
+      }
+      this.#dialog = undefined;
+      await this.#refresh();
+      return;
+    }
+
+    const target = joinPath(directory, name);
+    // A new file is an empty save; a save refuses an existing name, which is
+    // exactly the conflict we want to report here.
+    const result = dialog.kind === "newFolder" ? await client.mkdir(target) : await client.save(target, null, "", new AbortController().signal);
+    if (result.ok === false) {
+      this.#dialog = { ...dialog, error: result.error.message };
+      this.requestUpdate();
+      return;
+    }
+    this.#dialog = undefined;
+    await this.#refresh();
+  }
+
+  async #submitDelete(): Promise<void> {
+    const dialog = this.#dialog;
+    const client = this.#client;
+    if (dialog?.kind !== "delete" || client === undefined) return;
+    const result = await client.remove(dialog.entry.path, true);
+    if (result.ok === false) {
+      this.#dialog = { ...dialog, error: result.error.message };
+      this.requestUpdate();
+      return;
+    }
+    this.#dialog = undefined;
+    this.#setStatus(`Deleted ${dialog.entry.name}`);
+    if (this.#preview?.entry.path === dialog.entry.path) this.#preview = undefined;
+    await this.#refresh();
+  }
+
+  #pendingUploads: File[] = [];
+
+  #startUploads(files: File[]): void {
+    if (files.length === 0) return;
+    this.#pendingUploads = [...files];
+    void this.#processUploads();
+  }
+
+  async #processUploads(): Promise<void> {
+    const client = this.#client;
+    const directory = this.#directory;
+    if (client === undefined || directory === undefined) return;
+    while (this.#pendingUploads.length > 0) {
+      const file = this.#pendingUploads[0];
+      if (file === undefined) return;
+      this.#uploading = { name: file.name, received: 0, total: file.size };
+      this.requestUpdate();
+      const result = await client.upload(directory, file, new AbortController().signal, (received) => {
+        this.#uploading = { name: file.name, received, total: file.size };
+        this.requestUpdate();
+      });
+      this.#uploading = undefined;
+      if (result.ok === false && result.error.code === "EEXIST") {
+        // Keep the file at the head of the queue; the answer decides its fate.
+        this.#dialog = { kind: "replace", file };
+        this.requestUpdate();
+        return;
+      }
+      this.#pendingUploads.shift();
+      if (result.ok === false) {
+        this.#setStatus(`Upload failed: ${result.error.message}`);
+        this.#pendingUploads = [];
+        this.requestUpdate();
+        return;
+      }
+      this.#setStatus(`Uploaded ${file.name}`);
+      this.requestUpdate();
+    }
+    await this.#refresh();
+  }
+
+  async #confirmReplace(): Promise<void> {
+    const dialog = this.#dialog;
+    const client = this.#client;
+    const directory = this.#directory;
+    if (dialog?.kind !== "replace" || client === undefined || directory === undefined) return;
+    this.#dialog = undefined;
+    const file = this.#pendingUploads[0];
+    if (file === undefined) return;
+    const result = await client.upload(directory, file, new AbortController().signal, () => undefined, true);
+    this.#pendingUploads.shift();
+    if (result.ok === false) {
+      this.#setStatus(`Upload failed: ${result.error.message}`);
+      this.#pendingUploads = [];
+      this.requestUpdate();
+      return;
+    }
+    this.#setStatus(`Replaced ${file.name}`);
+    this.requestUpdate();
+    await this.#processUploads();
+  }
+
+  // ---- rendering ---------------------------------------------------------
+
+  #visibleEntries(): FileEntry[] {
+    if (this.#showHidden) return this.#entries;
+    return this.#entries.filter((entry) => !isHiddenName(entry.name));
+  }
+
+  #renderBreadcrumbs() {
     if (this.#editing) {
       return html`
         <input
@@ -283,14 +587,14 @@ export class FileManagerPanel extends LitElement {
         >
       `;
     }
+    const directory = this.#directory;
     if (directory === undefined) return html`<span class="crumb current">…</span>`;
-    const segments = breadcrumbSegments(directory);
-    return segments.map((segment, index) => html`
+    return breadcrumbSegments(directory).map((segment, index, all) => html`
       ${index === 0 ? "" : html`<span class="separator" aria-hidden="true">/</span>`}
       <button
-        class=${`crumb ${index === segments.length - 1 ? "current" : ""}`}
-        title=${index === segments.length - 1 ? "Edit path" : segment.path}
-        @click=${() => { if (index === segments.length - 1) this.#startEditingPath(); else void this.#openDirectory(segment.path); }}
+        class=${`crumb ${index === all.length - 1 ? "current" : ""}`}
+        title=${segment.path}
+        @click=${() => void this.#openDirectory(segment.path)}
       >${segment.name}</button>
     `);
   }
@@ -298,41 +602,174 @@ export class FileManagerPanel extends LitElement {
   #renderRow(entry: FileEntry) {
     const selected = this.#preview?.entry.path === entry.path;
     const directory = entry.kind === "directory" || entry.linkKind === "directory";
+    const menuOpen = this.#menu?.entry?.path === entry.path;
     return html`
-      <button
-        type="button"
-        class=${`ui-button ui-file-row ${selected ? "selected" : ""}`}
-        title=${entry.path}
-        aria-current=${selected ? "page" : "false"}
-        @click=${() => void this.#openEntry(entry)}
-      >
-        <span class="ui-file-leading leading" aria-hidden="true">
-          ${directory ? folderIcon() : html`<fm-file-icon .url=${resolveIcon(entry.path)}></fm-file-icon>`}
-        </span>
-        <span class="ui-file-label" dir="ltr">${entry.name}${entry.kind === "symlink" ? " ↗" : ""}</span>
-        <span class="ui-file-meta">${directory ? "" : formatSize(entry.size)}</span>
-      </button>
+      <div class=${`row-wrap ${menuOpen ? "menu-open" : ""}`}>
+        <button
+          type="button"
+          class=${`ui-button ui-file-row ${selected ? "selected" : ""}`}
+          title=${entry.path}
+          aria-current=${selected ? "page" : "false"}
+          @click=${() => void this.#openEntry(entry)}
+        >
+          <span class="ui-file-leading leading" aria-hidden="true">
+            ${directory ? folderIcon() : html`<fm-file-icon .url=${resolveIcon(entry.path)}></fm-file-icon>`}
+          </span>
+          <span class="ui-file-label" dir="ltr">${entry.name}${entry.kind === "symlink" ? " ↗" : ""}</span>
+          <span class="ui-file-meta">${directory ? "" : formatSize(entry.size)}</span>
+        </button>
+        <button
+          class="ui-button ui-button--compact ui-button--icon row-more"
+          aria-label=${`Actions for ${entry.name}`}
+          title="Actions"
+          aria-haspopup="menu"
+          @click=${(event: Event) => this.#openMenu(event, entry)}
+        >⋯</button>
+      </div>
     `;
+  }
+
+  #menuItem(label: string, run: () => void, className = ""): unknown {
+    return html`<button role="menuitem" class=${className} @click=${(event: Event) => { event.stopPropagation(); run(); }}>${label}</button>`;
+  }
+
+  #renderMenu() {
+    const menu = this.#menu;
+    if (menu === undefined) return "";
+    const entry = menu.entry;
+    return html`
+      <div class="menu" role="menu" style=${`left:${String(menu.x)}px; top:${String(menu.y)}px`} @keydown=${(event: KeyboardEvent) => {
+        if (event.key === "Escape") { this.#closeMenu(); }
+      }}>
+        ${entry === undefined
+          ? html`
+            ${this.#menuItem("New folder…", () => this.#askNewFolder())}
+            ${this.#menuItem("New file…", () => this.#askNewFile())}
+            ${this.#menuItem("Upload files…", () => this.#askUpload())}
+            ${this.#menuItem("Download this folder (.zip)", () => this.#downloadDirectory())}
+            <hr>
+            ${this.#menuItem(this.#showHidden ? "Hide hidden files" : "Show hidden files", () => this.#toggleHidden())}
+          `
+          : html`
+            ${this.#menuItem("Open", () => { this.#closeMenu(); void this.#openEntry(entry); })}
+            ${this.#menuItem(entry.kind === "directory" ? "Download as .zip" : "Download", () => { this.#closeMenu(); this.#downloadEntry(entry); })}
+            ${this.#menuItem("Copy path", () => this.#copyPath(entry))}
+            <hr>
+            ${this.#menuItem("Rename…", () => this.#askRename(entry))}
+            ${this.#menuItem("Delete…", () => void this.#askDelete(entry), "danger")}
+          `}
+      </div>
+    `;
+  }
+
+  #renderDialog() {
+    const dialog = this.#dialog;
+    if (dialog === undefined) return "";
+    if (dialog.kind === "delete") {
+      const count = dialog.plan.entries;
+      const detail = count > 1 ? `${String(count)} entries, ${formatSize(dialog.plan.bytes)}` : formatSize(dialog.plan.bytes);
+      return html`
+        <dialog class="dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
+          <h2>Delete ${dialog.entry.name}?</h2>
+          <p>This removes ${detail} and cannot be undone.</p>
+          ${dialog.error === undefined ? "" : html`<p class="dialog-error">${dialog.error}</p>`}
+          <footer>
+            <button @click=${() => this.#cancelDialog()}>Cancel</button>
+            <button class="danger" @click=${() => void this.#submitDelete()}>Delete</button>
+          </footer>
+        </dialog>
+      `;
+    }
+    if (dialog.kind === "replace") {
+      return html`
+        <dialog class="dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
+          <h2>Replace ${dialog.file.name}?</h2>
+          <p>A file with that name already exists in this folder.</p>
+          ${dialog.error === undefined ? "" : html`<p class="dialog-error">${dialog.error}</p>`}
+          <footer>
+            <button @click=${() => this.#cancelDialog()}>Cancel</button>
+            <button class="primary" @click=${() => void this.#confirmReplace()}>Replace</button>
+          </footer>
+        </dialog>
+      `;
+    }
+    const title = dialog.kind === "newFolder" ? "New folder" : dialog.kind === "newFile" ? "New file" : `Rename ${dialog.entry.name}`;
+    const action = dialog.kind === "rename" ? "Rename" : "Create";
+    return html`
+      <dialog class="dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
+        <h2>${title}</h2>
+        <input
+          aria-label="Name"
+          .value=${dialog.draft}
+          @input=${(event: Event) => {
+            const draft = (event.target as HTMLInputElement).value;
+            this.#dialog = { ...dialog, draft };
+          }}
+          @keydown=${(event: KeyboardEvent) => {
+            if (event.key === "Enter") { event.preventDefault(); void this.#submitName(); }
+          }}
+          @focus=${(event: Event) => (event.target as HTMLInputElement).select()}
+        >
+        ${dialog.error === undefined ? "" : html`<p class="dialog-error">${dialog.error}</p>`}
+        <footer>
+          <button @click=${() => this.#cancelDialog()}>Cancel</button>
+          <button class="primary" @click=${() => void this.#submitName()}>${action}</button>
+        </footer>
+      </dialog>
+    `;
+  }
+
+  #cancelDialog(): void {
+    if (this.#dialog === undefined) return;
+    this.#dialog = undefined;
+    this.requestUpdate();
   }
 
   override render() {
     const atRoot = this.#directory === undefined || this.#parent === null || this.#parent === this.#directory;
+    const entries = this.#visibleEntries();
     return html`
       <div class="ui-toolbar toolbar">
-        <div class="ui-toolbar-group breadcrumbs">${this.#renderBreadcrumbs()}</div>
+        <div class="ui-toolbar-group breadcrumbs" @click=${(event: MouseEvent) => {
+          if (this.#editing) return;
+          if ((event.target as HTMLElement).closest(".crumb") !== null) return;
+          this.#startEditingPath();
+        }}>${this.#renderBreadcrumbs()}</div>
         <div class="ui-toolbar-group">
+          <button
+            class="ui-button ui-button--compact ui-button--icon"
+            aria-label="File actions"
+            title="Actions"
+            aria-haspopup="menu"
+            @click=${(event: Event) => this.#openMenu(event)}
+          >⋯</button>
           <button
             class="ui-button ui-button--compact ui-button--icon"
             title="Refresh directory"
             aria-label="Refresh directory"
             ?disabled=${this.#loading}
-            @click=${() => { if (this.#directory !== undefined) void this.#openDirectory(this.#directory); }}
+            @click=${() => void this.#refresh()}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 5v6h-6"></path></svg>
           </button>
         </div>
       </div>
+      <input
+        class="visually-hidden"
+        type="file"
+        multiple
+        aria-hidden="true"
+        style="display:none"
+        @change=${(event: Event) => {
+          const input = event.target as HTMLInputElement;
+          const files = Array.from(input.files ?? []);
+          input.value = "";
+          this.#startUploads(files);
+        }}
+      >
       ${this.#error === undefined ? "" : html`<div class="notice error">${this.#error}</div>`}
+      ${this.#uploading === undefined ? "" : html`<div class="status">Uploading ${this.#uploading.name} — ${formatSize(this.#uploading.received)} of ${formatSize(this.#uploading.total)}</div>`}
+      ${this.#status === undefined ? "" : html`<div class="status">${this.#status}</div>`}
       <main>
         <div class="list ui-file-list" role="listbox" aria-label="Directory listing">
           ${atRoot ? "" : html`
@@ -343,13 +780,15 @@ export class FileManagerPanel extends LitElement {
               <span class="ui-file-label">..</span>
             </button>
           `}
-          ${this.#entries.length === 0
+          ${entries.length === 0
             ? html`<div class="notice">${this.#loading ? "Loading…" : "Empty directory"}</div>`
-            : this.#entries.map((entry) => this.#renderRow(entry))}
-          ${this.#truncated ? html`<div class="truncated">Showing the first ${String(this.#entries.length)} of ${String(this.#total)} entries.</div>` : ""}
+            : entries.map((entry) => this.#renderRow(entry))}
+          ${this.#truncated ? html`<div class="truncated">Showing the first ${String(entries.length)} of ${String(this.#total)} entries.</div>` : ""}
         </div>
         <div class="viewer">${this.#renderViewer()}</div>
       </main>
+      ${this.#renderMenu()}
+      ${this.#renderDialog()}
     `;
   }
 
@@ -389,4 +828,23 @@ function keyFor(context: PanelContext | undefined, snapshot: SelectionSnapshot |
 
 function isImage(name: string): boolean {
   return /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/iu.test(name);
+}
+
+function readHiddenPreference(): boolean {
+  // Dotfiles are shown by default: this is a filesystem browser, and the files
+  // that matter — .git, .config, .env — are the ones a hidden-by-default view
+  // would keep out of the way.
+  try {
+    return window.localStorage.getItem(HIDDEN_PREFERENCE_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function writeHiddenPreference(value: boolean): void {
+  try {
+    window.localStorage.setItem(HIDDEN_PREFERENCE_KEY, value ? "1" : "0");
+  } catch {
+    // A browser that refuses storage keeps the toggle for this page only.
+  }
 }

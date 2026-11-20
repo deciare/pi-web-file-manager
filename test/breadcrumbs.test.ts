@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { breadcrumbSegments, formatSize, resolveAddress } from "../src/browser/breadcrumbs.ts";
+import { baseName, breadcrumbSegments, formatSize, isHiddenName, joinPath, parentPath, resolveAddress } from "../src/browser/breadcrumbs.ts";
 
 test("splits a path into clickable segments from the root", () => {
   assert.deepEqual(breadcrumbSegments("/data/home/airi/knowledge-base"), [
@@ -46,4 +46,29 @@ test("sizes read the way a file manager should", () => {
   assert.equal(formatSize(1536), "1.5 KiB");
   assert.equal(formatSize(10 * 1024 * 1024), "10 MiB");
   assert.equal(formatSize(Number.NaN), "");
+});
+
+test("joins a name onto a directory without doubling the root separator", () => {
+  assert.equal(joinPath("/", "etc"), "/etc");
+  assert.equal(joinPath("/data/home/", "airi"), "/data/home/airi");
+  assert.equal(joinPath("/data", "notes.txt"), "/data/notes.txt");
+});
+
+test("finds the parent of a path", () => {
+  assert.equal(parentPath("/"), "/");
+  assert.equal(parentPath("/etc"), "/");
+  assert.equal(parentPath("/data/home/airi"), "/data/home");
+  assert.equal(parentPath("/data/home/airi/"), "/data/home");
+});
+
+test("finds the last segment of a path", () => {
+  assert.equal(baseName("/data/home/airi"), "airi");
+  assert.equal(baseName("/data/home/airi/"), "airi");
+  assert.equal(baseName("/"), "");
+});
+
+test("dotfiles are hidden names, everything else is not", () => {
+  assert.equal(isHiddenName(".git"), true);
+  assert.equal(isHiddenName(".."), true);
+  assert.equal(isHiddenName("notes.md"), false);
 });

@@ -93,7 +93,21 @@ function isWriteResult(value: unknown): value is { path: string; size: number; m
   return isRecord(value) && typeof value["path"] === "string" && typeof value["size"] === "number" && typeof value["mtimeMs"] === "number";
 }
 
-/** Send content over a channel and resolve with the terminal frame. */
+/**
+ * Send content over a channel and resolve with the terminal frame.
+ *
+ * The host's channel stays open until someone closes it, so the result is taken
+ * from the server's `done` or `error` frame rather than from `closed`: awaiting
+ * `closed` waits forever, which is exactly how a save could hang after its file
+ * had already been written.
+ *
+ * Sends are windowed by the acknowledgements the server sends back. The host
+ * queues at most 128 frames or 1 MiB per channel, and a tight loop over a large
+ * file reaches that in a few hundred chunks.
+ */
+const ACK_WINDOW_BYTES = 256 * 1024;
+const TERMINAL_TIMEOUT_MS = 60_000;
+
 async function sendContent(
   peer: Peer,
   operation: string,
@@ -103,37 +117,64 @@ async function sendContent(
   onProgress: (received: number) => void,
 ): Promise<Result<{ path: string; size: number; mtimeMs: number }>> {
   if (peer.openChannel === undefined) return { ok: false, error: { code: "EUNKNOWN", message: "This host does not support plugin channels" } };
+
   let settled: Result<{ path: string; size: number; mtimeMs: number }> | undefined;
+  let acknowledged = 0;
+  let wake: (() => void) | undefined;
+  let finish: (() => void) | undefined;
+  const terminal = new Promise<void>((resolve) => { finish = resolve; });
+  const nudge = (): void => { const resume = wake; wake = undefined; resume?.(); };
+
   const channel = await peer.openChannel(operation, open, {
     signal,
     onData(data) {
       if (!isRecord(data)) return;
-      if (data["type"] === "progress" && typeof data["received"] === "number") onProgress(data["received"]);
+      if (data["type"] === "progress" && typeof data["received"] === "number") {
+        acknowledged = data["received"];
+        onProgress(acknowledged);
+        nudge();
+      }
       if (data["type"] === "error" && typeof data["message"] === "string") {
         const code = typeof data["code"] === "string" && (ERROR_CODES as readonly string[]).includes(data["code"]) ? data["code"] as ErrorCode : "EUNKNOWN";
         settled = { ok: false, error: { code, message: data["message"] } };
+        finish?.();
       }
       if (data["type"] === "done" && isWriteResult(data)) {
         settled = { ok: true, data: { path: data.path, size: data.size, mtimeMs: data.mtimeMs } };
+        finish?.();
       }
     },
   }).catch((error: unknown) => {
     settled = { ok: false, error: { code: "EUNKNOWN", message: error instanceof Error ? error.message : String(error) } };
+    finish?.();
     return undefined;
   });
   if (channel === undefined) return settled ?? { ok: false, error: { code: "EUNKNOWN", message: "Channel failed to open" } };
 
   try {
+    let sent = 0;
     for await (const chunk of chunks()) {
+      if (settled !== undefined) break;
+      while (sent - acknowledged > ACK_WINDOW_BYTES && settled === undefined) {
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+          setTimeout(resolve, 100);
+        });
+      }
       channel.send({ type: "chunk", data: toBase64(chunk) });
+      sent += chunk.length;
     }
-    channel.send({ type: "end" });
+    if (settled === undefined) channel.send({ type: "end" });
   } catch (error) {
-    channel.close("client aborted");
+    try { channel.close("client aborted"); } catch { /* already closed */ }
     return { ok: false, error: { code: "EUNKNOWN", message: error instanceof Error ? error.message : String(error) } };
   }
-  await channel.closed;
-  return settled ?? { ok: false, error: { code: "EUNKNOWN", message: "The server closed the channel without a result" } };
+
+  const timer = setTimeout(() => { finish?.(); }, TERMINAL_TIMEOUT_MS);
+  await terminal;
+  clearTimeout(timer);
+  try { channel.close("complete"); } catch { /* already closed */ }
+  return settled ?? { ok: false, error: { code: "EUNKNOWN", message: "The server did not report a result" } };
 }
 
 export function toBase64(bytes: Uint8Array): string {

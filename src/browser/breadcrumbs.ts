@@ -40,3 +40,26 @@ export function formatSize(bytes: number): string {
   while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
   return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit] ?? "B"}`;
 }
+
+/** Join a directory and a single name, without doubling the separator at the root. */
+export function joinPath(directory: string, name: string): string {
+  return `${directory === "/" ? "" : directory.replace(/\/+$/u, "")}/${name}`;
+}
+
+export function parentPath(path: string): string {
+  const trimmed = path.replace(/\/+$/u, "");
+  const index = trimmed.lastIndexOf("/");
+  if (index <= 0) return "/";
+  return trimmed.slice(0, index);
+}
+
+export function baseName(path: string): string {
+  const trimmed = path.replace(/\/+$/u, "");
+  const index = trimmed.lastIndexOf("/");
+  return index < 0 ? trimmed : trimmed.slice(index + 1);
+}
+
+/** Dotfiles: hidden from a listing unless the user asks for them. */
+export function isHiddenName(name: string): boolean {
+  return name.startsWith(".");
+}
