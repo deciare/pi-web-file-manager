@@ -182,7 +182,7 @@ export async function renamePath(input: RenameRequest): Promise<RenameResponse> 
   // reads as noise. Naming it here keeps the refusal legible.
   if (destination?.isDirectory() === true) {
     const names = await readdir(to).catch(() => []);
-    if (names.length > 0) throw new Failure("ENOTEMPTY", "The folder at the destination is not empty", to);
+    if (names.length > 0) throw new Failure("ENOTEMPTY", "The folder at the destination is not empty, so it cannot be replaced", to);
   }
   await rename(from, to);
   return { path: to };
