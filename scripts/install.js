@@ -20,7 +20,7 @@ import { cp, lstat, readFile, readdir, rename, rm, stat } from "node:fs/promises
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -77,6 +77,23 @@ try {
 }
 for (const required of [join(root, "server-plugin.js"), join(root, "browser", manifest.piWeb.plugins[0].module.split("/").at(-1))]) {
   if (!(await isFile(required))) fail(`build produced no ${basename(required)}; nothing installed`);
+}
+
+// The daemon imports the server entry as an ES module. A bundle that only
+// works from a CommonJS parent fails exactly here and nowhere else, so it is
+// imported the way the host will import it before anything is installed.
+console.log("verifying the server bundle imports as ESM…");
+const probe = [
+  "const m = await import(process.argv[1]);",
+  "if (typeof m.default?.activate !== 'function') throw new Error('no activate export');",
+  "const peer = m.default.activate().peer;",
+  "for (const name of ['request', 'openChannel', 'resource']) if (typeof peer[name] !== 'function') throw new Error(`no ${name}`);",
+  "console.log('ok');",
+].join("\n");
+try {
+  await run(process.execPath, ["--input-type=module", "-e", probe, pathToFileURL(join(root, "server-plugin.js")).href]);
+} catch (error) {
+  fail(`the server bundle does not import as an ES module, nothing installed: ${String(error.stderr ?? error.message).trim()}`);
 }
 
 // ---- stage, then swap: a failed copy leaves the previous install intact -----

@@ -36,5 +36,12 @@ await Promise.all([
     entryPoints: ["src/server/index.ts"],
     outfile: "server-plugin.js",
     platform: "node",
+    // esbuild renders a CommonJS dependency's `require()` calls through its own
+    // shim, which throws "Dynamic require of … is not supported" when the
+    // bundle is imported as an ES module and no `require` is in scope. The
+    // host imports this entry as ESM, so the bundle supplies a real one.
+    banner: {
+      js: 'import { createRequire as __fmCreateRequire } from "node:module"; const require = __fmCreateRequire(import.meta.url);',
+    },
   }),
 ]);
