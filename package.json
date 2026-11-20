@@ -18,7 +18,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test test/*.test.ts",
+    "install:package": "node scripts/install.js"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
