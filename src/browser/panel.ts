@@ -64,7 +64,7 @@ interface MenuState {
 
 export class FileManagerPanel extends LitElement {
   static override styles = css`
-    :host { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--pi-text); background: var(--pi-bg); font-size: 13px; }
+    :host { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--pi-text); background: var(--pi-bg); font-size: 13px; }
     .toolbar { gap: 8px; padding-inline: 8px; border-bottom: 1px solid var(--pi-border-muted); }
     .breadcrumbs { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 2px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; cursor: text; align-self: stretch; }
     .crumb { flex: 0 0 auto; border: 0; border-radius: 6px; background: none; color: var(--pi-muted); padding: 3px 5px; font: inherit; font-family: var(--pi-mono, ui-monospace, monospace); cursor: pointer; }
@@ -78,6 +78,7 @@ export class FileManagerPanel extends LitElement {
     .row-wrap .ui-button.ui-file-row { width: 100%; padding-inline-end: 34px; }
     .row-more { position: absolute; inset-inline-end: 2px; top: 50%; transform: translateY(-50%); opacity: 0; }
     .row-wrap:hover .row-more, .row-more:focus-visible, .row-wrap.menu-open .row-more { opacity: 1; }
+    @media (pointer: coarse) { .row-more { opacity: 1; } }
     .viewer { display: flex; flex-direction: column; min-height: 0; }
     .viewer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding-inline-start: 10px; border-bottom: 1px solid var(--pi-border-muted); }
     .viewer-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
@@ -107,7 +108,8 @@ export class FileManagerPanel extends LitElement {
     dialog.dialog button { font: inherit; border-radius: 6px; border: 1px solid var(--pi-border); background: var(--pi-surface); color: var(--pi-text); padding: 6px 12px; cursor: pointer; }
     dialog.dialog button.primary { border-color: var(--pi-accent); background: var(--pi-accent); color: var(--pi-accent-contrast, #06121a); }
     dialog.dialog button.danger { border-color: var(--pi-danger); background: var(--pi-danger); color: #fff; }
-    .status { padding: 4px 10px; border-bottom: 1px solid var(--pi-border-muted); color: var(--pi-muted); font-size: 12px; }
+    .status-stack { position: absolute; inset-inline-end: 10px; bottom: 10px; z-index: 20; display: grid; gap: 6px; justify-items: end; pointer-events: none; }
+    .status { max-width: min(420px, 80%); border: 1px solid var(--pi-border-muted); border-radius: 8px; background: var(--pi-bg-overlay, var(--pi-surface)); box-shadow: 0 6px 18px var(--pi-shadow, rgba(0, 0, 0, 0.35)); color: var(--pi-text); padding: 5px 10px; font-size: 12px; }
   `;
 
   #context: PanelContext | undefined;
@@ -422,9 +424,9 @@ export class FileManagerPanel extends LitElement {
 
   #copyPath(entry: FileEntry): void {
     this.#closeMenu();
+    // No feedback: a copy is self-evident when the text appears, and anything
+    // that appears and vanishes here would move the list under the pointer.
     void navigator.clipboard?.writeText(entry.path);
-    this.#setStatus(`Copied ${entry.path}`);
-    this.requestUpdate();
   }
 
   #downloadDirectory(): void {
@@ -738,13 +740,6 @@ export class FileManagerPanel extends LitElement {
         <div class="ui-toolbar-group">
           <button
             class="ui-button ui-button--compact ui-button--icon"
-            aria-label="File actions"
-            title="Actions"
-            aria-haspopup="menu"
-            @click=${(event: Event) => this.#openMenu(event)}
-          >⋯</button>
-          <button
-            class="ui-button ui-button--compact ui-button--icon"
             title="Refresh directory"
             aria-label="Refresh directory"
             ?disabled=${this.#loading}
@@ -752,6 +747,13 @@ export class FileManagerPanel extends LitElement {
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 5v6h-6"></path></svg>
           </button>
+          <button
+            class="ui-button ui-button--compact ui-button--icon"
+            aria-label="File actions"
+            title="Actions"
+            aria-haspopup="menu"
+            @click=${(event: Event) => this.#openMenu(event)}
+          >⋯</button>
         </div>
       </div>
       <input
@@ -768,8 +770,6 @@ export class FileManagerPanel extends LitElement {
         }}
       >
       ${this.#error === undefined ? "" : html`<div class="notice error">${this.#error}</div>`}
-      ${this.#uploading === undefined ? "" : html`<div class="status">Uploading ${this.#uploading.name} — ${formatSize(this.#uploading.received)} of ${formatSize(this.#uploading.total)}</div>`}
-      ${this.#status === undefined ? "" : html`<div class="status">${this.#status}</div>`}
       <main>
         <div class="list ui-file-list" role="listbox" aria-label="Directory listing">
           ${atRoot ? "" : html`
@@ -787,6 +787,10 @@ export class FileManagerPanel extends LitElement {
         </div>
         <div class="viewer">${this.#renderViewer()}</div>
       </main>
+      <div class="status-stack">
+        ${this.#uploading === undefined ? "" : html`<div class="status" role="status">Uploading ${this.#uploading.name} — ${formatSize(this.#uploading.received)} of ${formatSize(this.#uploading.total)}</div>`}
+        ${this.#status === undefined ? "" : html`<div class="status" role="status">${this.#status}</div>`}
+      </div>
       ${this.#renderMenu()}
       ${this.#renderDialog()}
     `;
