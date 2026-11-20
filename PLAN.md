@@ -22,7 +22,7 @@ Parity with a terminal is the goal, but four things stay true regardless:
 
 - **No privilege escalation.** No `sudo`, no spawning `rm`/`mv`/`zip`, no shell at all. Every operation is a `node:fs` call made as the daemon's user.
 - **No symlink-induced destruction.** Deleting a symlink unlinks the link. Recursive delete never traverses into a symlinked directory, so a link into `~` cannot turn "delete this folder" into "delete my home".
-- **No silent overwrite.** Writes and moves refuse an existing destination unless the user asked to overwrite, and edits carry the mtime the file had when it was opened.
+- **No silent overwrite.** An open editor carries the mtime the file had when it was loaded, and a move or upload onto an existing name stops and asks — replace, keep both under a derived name, or cancel — rather than clobbering or failing flatly.
 - **No operation on `/` itself.** Renaming or deleting the filesystem root is refused before it becomes a catastrophe rather than after.
 
 ## Panel shape
@@ -34,6 +34,7 @@ A no-workspace **application panel**, so it is available with or without a proje
 - Split view: list above, viewer/editor below, with a full-height toggle. Chosen over left/right because a side-by-side split is unusable on mobile.
 - Soft-wrap is a single global toggle persisted per browser, applied identically to raw and highlighted views. The split state is persisted the same way. There is no per-file state.
 - Deep-linkable: the current directory and selected file live in the panel's query namespace, so a path can be bookmarked or shared.
+- Refresh is explicit rather than watched, so the panel never redraws under the user's cursor: a refresh control re-lists the current directory, and an open file whose mtime no longer matches disk offers to reload it.
 
 ## Transfer and size policy
 
@@ -62,9 +63,9 @@ Resources: `download` (one file), `zip` (one directory tree, deflate, no symlink
 
 ## Phases
 
-1. **Read.** Browse, breadcrumbs, go-to-path, paged listing, per-row and folder menus, text viewer, image/PDF/Markdown preview, download file, copy absolute path, copy workspace-relative path, hidden-files toggle, deep links, per-browser persistence.
-2. **Edit.** CodeMirror with syntax highlighting and wrap toggle, save with conflict detection, dirty guard on navigation and unload, full-height toggle.
-3. **Mutate.** New file, new folder, rename, move (dialog), delete with confirmation and item count, upload files, upload a directory tree, download a directory as zip.
+1. **Read.** Browse, breadcrumbs, go-to-path, paged listing, directory refresh, per-row and folder menus, text viewer, image/PDF/Markdown preview, download file, copy absolute path, copy workspace-relative path, hidden-files toggle, deep links, per-browser persistence.
+2. **Edit.** CodeMirror with syntax highlighting and wrap toggle, save with conflict detection, reload-from-disk for a file that changed underneath the editor, dirty guard on navigation and unload, full-height toggle.
+3. **Mutate.** New file, new folder, rename, move (dialog) with a resolution step when the destination name is taken, delete with confirmation and item count, upload files, upload a directory tree, download a directory as zip.
 4. **Polish.** Drag-and-drop move, in-directory filter, "open terminal here" if the Terminal plugin exposes a way to open a shell at an existing directory (otherwise dropped rather than hacked).
 
 Each phase is usable on its own; nothing in an earlier phase depends on a later one landing.
