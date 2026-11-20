@@ -12,9 +12,12 @@
 
 export const PLUGIN_ID = "file-manager";
 
-/** Entries per listing page, and the largest page a caller may ask for. */
-export const LIST_PAGE_SIZE = 500;
-export const LIST_PAGE_MAX = 2000;
+/**
+ * How many entries one listing may return. The list is scrolled rather than
+ * paged, so this is a response-size guard, not a page size: a directory with
+ * more entries than this reports `truncated` and the panel says so.
+ */
+export const LIST_MAX_ENTRIES = 20_000;
 /** Largest file offered for editing. Larger files open read-only. */
 export const TEXT_EDIT_MAX_BYTES = 2 * 1024 * 1024;
 /** Raw bytes per channel frame, before base64 expands them to 64 KiB. */
@@ -52,6 +55,8 @@ export interface ListResponse {
   readonly entries: readonly FileEntry[];
   readonly total: number;
   readonly offset: number;
+  /** True when the directory holds more entries than this response carried. */
+  readonly truncated: boolean;
 }
 
 export interface StatRequest {
@@ -137,12 +142,16 @@ export interface UploadOpen {
   readonly path: string;
   readonly name: string;
   readonly size?: number;
+  /** Replace an existing file with this name. The caller confirms first. */
+  readonly overwrite?: boolean;
 }
 
 export interface SaveTextOpen {
   readonly path: string;
   /** mtime the file had when it was opened; null for a new file. */
   readonly expectedMtimeMs: number | null;
+  /** Write despite a changed mtime. The caller has shown the user the conflict. */
+  readonly force?: boolean;
 }
 
 /** Browser to server. */

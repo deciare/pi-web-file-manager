@@ -7,6 +7,7 @@ import {
 } from "./fsOps.ts";
 import { openSaveChannel, openUploadChannel } from "./content.ts";
 import { downloadResource, zipResource } from "./resources.ts";
+import { startTempSweeper } from "./temps.ts";
 
 /**
  * Request dispatch. Every handler validates its own input, because every input
@@ -78,7 +79,15 @@ export async function resource(context: ResourceContext) {
 const plugin: ServerPluginDefinition = {
   apiVersion: 5,
   name: "File manager",
-  activate: () => ({ peer: { request, openChannel, resource } }),
+  activate: () => {
+    // Interrupted transfers leave temporaries; the timer revisits directories
+    // this daemon wrote into, and listings sweep the rest.
+    const stopSweeper = startTempSweeper();
+    return {
+      peer: { request, openChannel, resource },
+      dispose: () => { stopSweeper(); },
+    };
+  },
 };
 
 export default plugin;

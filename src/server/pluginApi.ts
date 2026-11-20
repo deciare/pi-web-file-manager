@@ -54,5 +54,6 @@ export interface ServerPluginDefinition {
       openChannel(context: ChannelOpenContext): Promise<PeerChannel>;
       resource(context: ResourceContext): Promise<ResourceResponse>;
     };
+    readonly dispose?: (signal: AbortSignal) => void | Promise<void>;
   };
 }

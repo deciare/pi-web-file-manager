@@ -237,3 +237,50 @@ test("keeps mtimes comparable for the editor's conflict check", async () => {
     await box.cleanup();
   }
 });
+
+test("returns a whole directory in one response when no page is asked for", async () => {
+  const box = await sandbox();
+  try {
+    for (let index = 0; index < 300; index += 1) await writeFile(box.path(`f${String(index).padStart(3, "0")}.txt`), "x");
+    const listing = await listDirectory({ path: box.root });
+    assert.equal(listing.entries.length, 300);
+    assert.equal(listing.total, 300);
+    assert.equal(listing.truncated, false);
+  } finally {
+    await box.cleanup();
+  }
+});
+
+test("hides in-flight temporaries and sweeps the stale ones", async () => {
+  const box = await sandbox();
+  try {
+    const { utimes, access } = await import("node:fs/promises");
+    await writeFile(box.path("real.txt"), "real");
+    const stale = box.path(".real.txt.fm-11111111-2222-3333-4444-555555555555");
+    const fresh = box.path(".real.txt.fm-66666666-7777-8888-9999-000000000000");
+    await writeFile(stale, "junk");
+    await writeFile(fresh, "in flight");
+    const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    await utimes(stale, old, old);
+
+    const listing = await listDirectory({ path: box.root });
+    assert.deepEqual(listing.entries.map((entry) => entry.name), ["real.txt"]);
+
+    // The sweep runs after the response; the stale temporary must disappear
+    // without the caller having to ask, and the live one must survive.
+    await waitForGone(stale);
+    assert.equal(await readFile(fresh, "utf8"), "in flight");
+    await assert.rejects(() => access(stale));
+  } finally {
+    await box.cleanup();
+  }
+});
+
+async function waitForGone(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const present = await readFile(path).then(() => true, () => false);
+    if (!present) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`${path} was not swept`);
+}

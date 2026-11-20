@@ -22,7 +22,7 @@ Parity with a terminal is the goal, but four things stay true regardless:
 
 - **No privilege escalation.** No `sudo`, no spawning `rm`/`mv`/`zip`, no shell at all. Every operation is a `node:fs` call made as the daemon's user.
 - **No symlink-induced destruction.** Deleting a symlink unlinks the link. Recursive delete never traverses into a symlinked directory, so a link into `~` cannot turn "delete this folder" into "delete my home".
-- **No silent overwrite.** An open editor carries the mtime the file had when it was loaded, and a move or upload onto an existing name stops and asks — replace, keep both under a derived name, or cancel — rather than clobbering or failing flatly.
+- **No silent overwrite, and no refusal without a way forward.** An open editor carries the mtime the file had when it was loaded; a save over a changed file offers cancel, reload from disk, or save anyway. A move or upload onto an existing name stops and asks — replace, keep both under a derived name, or cancel. The server enforces the *asking* (`force` and `overwrite` are explicit flag), not the answer: replacing a file deliberately is a legitimate thing to do.
 - **No operation on `/` itself.** Renaming or deleting the filesystem root is refused before it becomes a catastrophe rather than after.
 
 ## Panel shape
@@ -35,6 +35,8 @@ A no-workspace **application panel**, so it is available with or without a proje
 - Soft-wrap is a single global toggle persisted per browser, applied identically to raw and highlighted views. The split state is persisted the same way. There is no per-file state.
 - Deep-linkable: the current directory and selected file live in the panel's query namespace, so a path can be bookmarked or shared.
 - Refresh is explicit rather than watched, so the panel never redraws under the user's cursor: a refresh control re-lists the current directory, and an open file whose mtime no longer matches disk offers to reload it.
+- The list scrolls; it does not page. A directory is returned whole, subject to a protocol-level entry cap, and a truncated response says so rather than silently hiding entries.
+- The panel remembers the directory open in each *session* for the life of the page: switching session and coming back restores it, and a reload starts at the workspace root again.
 
 ## Transfer and size policy
 
@@ -49,7 +51,9 @@ Host protocol limits shape the design; these are the numbers the implementation 
 | resource selector | 4 KiB | download and zip identify by path only |
 | resource stream | 30 min | zip streaming is bounded by time, not size |
 
-So: file **content** always travels over channels or resources, never through `request`. Text opens for editing up to 2 MiB; larger files and binaries open read-only with a download link. Listings page at 500 entries with a total count, because a directory can hold anything.
+So: file **content** always travels over channels or resources, never through `request`. Text opens for editing up to 2 MiB; larger files and binaries open read-only with a download link. A listing returns the whole directory up to 20 000 entries and reports `truncated` beyond that, because the list is scrolled rather than paged.
+
+Interrupted transfers leave a temporary sibling (`.<name>.fm-<uuid>`) rather than a half-written file. Three things stop those accumulating: a cancelled or failed transfer unlinks its own temporary, listing a directory sweeps stale ones in it (which also covers a container that died mid-transfer, whose directories are next listed by a new process), and a ten-minute timer revisits the directories this daemon wrote into. Listing filters temporaries out regardless, so they are never shown as the user's files.
 
 ## Wire protocol
 

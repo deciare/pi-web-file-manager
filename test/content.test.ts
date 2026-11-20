@@ -131,3 +131,37 @@ test("rejects a frame that is not valid base64", async () => {
     await box.cleanup();
   }
 });
+
+test("replaces an existing file when the caller confirms an overwrite", async () => {
+  const box = await sandbox();
+  try {
+    await writeFile(box.path("uploaded.txt"), "old contents");
+    await chmod(box.path("uploaded.txt"), 0o640);
+    const harness = channelHarness("upload", { path: box.root, name: "uploaded.txt", overwrite: true });
+    const channel = await openChannel(harness.context);
+    await channel.receive({ type: "chunk", data: base64("new contents") }, harness.controller.signal);
+    await channel.receive({ type: "end" }, harness.controller.signal);
+
+    assert.equal(await readFile(box.path("uploaded.txt"), "utf8"), "new contents");
+    assert.equal((await stat(box.path("uploaded.txt"))).mode & 0o777, 0o640);
+    assert.equal(framesOf(harness.frames).find((frame) => frame["type"] === "error"), undefined);
+  } finally {
+    await box.cleanup();
+  }
+});
+
+test("saves anyway when the caller forces past a changed mtime", async () => {
+  const box = await sandbox();
+  try {
+    await writeFile(box.path("note.txt"), "on disk now");
+    const harness = channelHarness("saveText", { path: box.path("note.txt"), expectedMtimeMs: 1, force: true });
+    const channel = await openChannel(harness.context);
+    await channel.receive({ type: "chunk", data: base64("what the editor saw") }, harness.controller.signal);
+    await channel.receive({ type: "end" }, harness.controller.signal);
+
+    assert.equal(await readFile(box.path("note.txt"), "utf8"), "what the editor saw");
+    assert.equal(framesOf(harness.frames).find((frame) => frame["type"] === "error"), undefined);
+  } finally {
+    await box.cleanup();
+  }
+});

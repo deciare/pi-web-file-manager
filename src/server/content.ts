@@ -35,6 +35,7 @@ export interface UploadOpenInput {
   readonly path: string;
   readonly name: string;
   readonly size?: number;
+  readonly overwrite?: boolean;
 }
 
 export function parseUploadOpen(input: unknown): UploadOpenInput {
@@ -44,12 +45,19 @@ export function parseUploadOpen(input: unknown): UploadOpenInput {
   const name = singleName(record["name"]);
   const size = record["size"];
   if (size !== undefined && (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0)) throw invalid("size must be a non-negative integer");
-  return size === undefined ? { path, name } : { path, name, size };
+  const overwrite = record["overwrite"];
+  if (overwrite !== undefined && typeof overwrite !== "boolean") throw invalid("overwrite must be a boolean");
+  return {
+    path, name,
+    ...(size === undefined ? {} : { size }),
+    ...(overwrite === undefined ? {} : { overwrite }),
+  };
 }
 
 export interface SaveOpenInput {
   readonly path: string;
   readonly expectedMtimeMs: number | null;
+  readonly force?: boolean;
 }
 
 export function parseSaveOpen(input: unknown): SaveOpenInput {
@@ -60,7 +68,9 @@ export function parseSaveOpen(input: unknown): SaveOpenInput {
   if (expected !== null && (typeof expected !== "number" || !Number.isFinite(expected))) {
     throw invalid("expectedMtimeMs must be a number or null");
   }
-  return { path, expectedMtimeMs: expected as number | null };
+  const force = record["force"];
+  if (force !== undefined && typeof force !== "boolean") throw invalid("force must be a boolean");
+  return force === undefined ? { path, expectedMtimeMs: expected as number | null } : { path, expectedMtimeMs: expected as number | null, force };
 }
 
 function isFrame(value: unknown): value is ContentRequestFrame {
@@ -120,19 +130,30 @@ class TempFileSink implements Sink {
 async function prepareUpload(open: UploadOpenInput): Promise<Sink> {
   const finalPath = join(open.path, open.name);
   const existing = await lstat(finalPath).catch((error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? undefined : Promise.reject(error)));
-  if (existing !== undefined) throw new Failure("EEXIST", "A file with that name already exists", finalPath);
+  if (existing?.isDirectory() === true) throw new Failure("EISDIR", "A directory has that name", finalPath);
+  if (existing !== undefined && open.overwrite !== true) {
+    throw new Failure("EEXIST", "A file with that name already exists", finalPath);
+  }
   const { temp, handle } = await createTempSibling(finalPath);
-  return new TempFileSink(handle, temp, finalPath, publishNew);
+  // Replacing keeps the destination's permissions, exactly as a save does.
+  const publish = existing === undefined
+    ? publishNew
+    : (from: string, to: string) => replaceFile(from, to, existing.mode);
+  return new TempFileSink(handle, temp, finalPath, publish);
 }
 
 async function prepareSave(open: SaveOpenInput): Promise<Sink> {
   const existing = await lstat(open.path).catch((error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? undefined : Promise.reject(error)));
-  if (open.expectedMtimeMs === null) {
-    if (existing !== undefined) throw new Failure("ECONFLICT", "The file exists but was opened as a new file", open.path);
-  } else if (existing === undefined) {
-    throw new Failure("ECONFLICT", "The file was removed since it was opened", open.path);
-  } else if (Math.abs(existing.mtimeMs - open.expectedMtimeMs) > 1) {
-    throw new Failure("ECONFLICT", "The file changed on disk since it was opened", open.path);
+  // `force` is the user answering "save anyway" after seeing the conflict; it
+  // skips the comparison, never the check that the destination is a file.
+  if (open.force !== true) {
+    if (open.expectedMtimeMs === null) {
+      if (existing !== undefined) throw new Failure("ECONFLICT", "The file exists but was opened as a new file", open.path);
+    } else if (existing === undefined) {
+      throw new Failure("ECONFLICT", "The file was removed since it was opened", open.path);
+    } else if (Math.abs(existing.mtimeMs - open.expectedMtimeMs) > 1) {
+      throw new Failure("ECONFLICT", "The file changed on disk since it was opened", open.path);
+    }
   }
   if (existing?.isDirectory() === true) throw new Failure("EISDIR", "Cannot save over a directory", open.path);
   const mode = existing === undefined ? 0o666 : existing.mode;

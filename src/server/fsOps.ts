@@ -1,16 +1,14 @@
 import { constants } from "node:fs";
 import { chmod, link, lstat, mkdir, open, readdir, readlink, rename, rm, rmdir, stat, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import type {
   DeletePlanResponse, DeleteRequest, DeleteResponse, FileEntry, ListResponse, MkdirResponse,
   ReadTextResponse, RenameRequest, RenameResponse, StatResponse,
 } from "../shared/protocol.ts";
-import {
-  BINARY_SNIFF_BYTES, LIST_PAGE_MAX, LIST_PAGE_SIZE, TEXT_EDIT_MAX_BYTES,
-} from "../shared/protocol.ts";
+import { BINARY_SNIFF_BYTES, LIST_MAX_ENTRIES, TEXT_EDIT_MAX_BYTES } from "../shared/protocol.ts";
 import { absolutePath, refuseRoot } from "./paths.ts";
+import { isTempName, sweepDirectory, tempNameFor, trackDirectory } from "./temps.ts";
 import { Failure, invalid } from "./failure.ts";
 
 /** Backstop for counting a recursive delete, so a runaway tree cannot stall a request. */
@@ -24,9 +22,9 @@ export function pageOffset(value: unknown): number {
 }
 
 export function pageLimit(value: unknown): number {
-  if (value === undefined) return LIST_PAGE_SIZE;
+  if (value === undefined) return LIST_MAX_ENTRIES;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) throw invalid("limit must be a positive integer");
-  return Math.min(value, LIST_PAGE_MAX);
+  return Math.min(value, LIST_MAX_ENTRIES);
 }
 
 /**
@@ -71,7 +69,11 @@ export async function listDirectory(input: { path?: unknown; offset?: unknown; l
   const limit = pageLimit(input.limit);
 
   const entries = await readdir(path, { withFileTypes: true });
+  // Temporaries from interrupted transfers are ours, not the user's; they are
+  // hidden from listings and swept here, where someone would otherwise see them.
+  if (entries.some((entry) => isTempName(entry.name))) void sweepDirectory(path);
   const sorted = entries
+    .filter((entry) => !isTempName(entry.name))
     .map((entry) => ({ name: entry.name, directory: entry.isDirectory() }))
     .sort((left, right) => {
       if (left.directory !== right.directory) return left.directory ? -1 : 1;
@@ -88,6 +90,7 @@ export async function listDirectory(input: { path?: unknown; offset?: unknown; l
     entries: described,
     total: sorted.length,
     offset,
+    truncated: offset + described.length < sorted.length,
   };
 }
 
@@ -239,8 +242,9 @@ export async function deletePath(input: DeleteRequest): Promise<DeleteResponse> 
 export async function createTempSibling(finalPath: string): Promise<{ temp: string; handle: FileHandle }> {
   const directory = dirname(finalPath);
   const name = basename(finalPath);
-  const temp = join(directory, `.${name}.fm-${randomUUID()}`);
+  const temp = join(directory, tempNameFor(name));
   const handle = await open(temp, "wx", 0o600);
+  trackDirectory(directory);
   return { temp, handle };
 }
 
