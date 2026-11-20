@@ -123,6 +123,7 @@ export class FileManagerPanel extends LitElement {
     dialog.dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
     dialog.dialog .dialog-error { margin: 8px 0 0; color: var(--pi-danger); }
     dialog.dialog button { font: inherit; border-radius: 6px; border: 1px solid var(--pi-border); background: var(--pi-surface); color: var(--pi-text); padding: 6px 12px; cursor: pointer; }
+    dialog.dialog button[disabled] { opacity: 0.5; cursor: not-allowed; }
     dialog.dialog button.primary { border-color: var(--pi-accent); background: var(--pi-accent); color: var(--pi-accent-contrast, #06121a); }
     dialog.dialog button.danger { border-color: var(--pi-danger); background: var(--pi-danger); color: #fff; }
     dialog.dialog.move-dialog { width: min(480px, calc(100vw - 32px)); }
@@ -130,6 +131,8 @@ export class FileManagerPanel extends LitElement {
     .move-list { max-height: min(320px, 45vh); overflow-y: auto; border: 1px solid var(--pi-border-muted); border-radius: 8px; }
     dialog.dialog .move-row { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; border-radius: 0; background: none; color: var(--pi-text); padding: 7px 9px; text-align: start; }
     dialog.dialog .move-row:hover, dialog.dialog .move-row:focus-visible { background: var(--pi-surface-hover, var(--pi-surface)); outline: none; }
+    dialog.dialog .move-row[disabled] { color: var(--pi-dim, var(--pi-muted)); cursor: not-allowed; opacity: 0.55; }
+    dialog.dialog .move-row[disabled]:hover { background: none; }
     .move-hint { margin: 8px 0 0; color: var(--pi-muted); }
     .status-stack { position: absolute; inset-inline-end: 10px; bottom: 10px; z-index: 20; display: grid; gap: 6px; justify-items: end; pointer-events: none; }
     .status { max-width: min(420px, 80%); border: 1px solid var(--pi-border-muted); border-radius: 8px; background: var(--pi-bg-overlay, var(--pi-surface)); box-shadow: 0 6px 18px var(--pi-shadow, rgba(0, 0, 0, 0.35)); color: var(--pi-text); padding: 5px 10px; font-size: 12px; }
@@ -588,7 +591,13 @@ export class FileManagerPanel extends LitElement {
     const target = joinPath(dialog.directory, dialog.entry.name);
     const result = await client.rename(dialog.entry.path, target, overwrite);
     if (result.ok === false) {
-      this.#dialog = { ...dialog, error: result.error.message, canReplace: result.error.code === "EEXIST" };
+      // The server's code is the contract; the sentence is this dialog's, so a
+      // wording fix lands with a reload instead of a daemon restart.
+      const taken = result.error.code === "EEXIST";
+      const error = taken
+        ? `A file or folder named ${dialog.entry.name} already exists in that folder.`
+        : result.error.message;
+      this.#dialog = { ...dialog, error, canReplace: taken };
       this.requestUpdate();
       return;
     }
@@ -909,11 +918,22 @@ export class FileManagerPanel extends LitElement {
             ? html`<div class="notice" role="status">Loading folders…</div>`
             : dialog.directories.length === 0
               ? html`<div class="notice">No folders in here</div>`
-              : dialog.directories.map((child) => html`
-                <button class="move-row" @click=${() => void this.#loadMoveDirectory(child.path)}>
-                  <span class="leading" aria-hidden="true">${folderIcon()}</span>${child.name}
-                </button>
-              `)}
+              : dialog.directories.map((child) => {
+                // The item being moved and everything under it are not
+                // destinations: a folder cannot become its own descendant.
+                const forbidden = dialog.entry.kind === "directory"
+                  && (child.path === dialog.entry.path || child.path.startsWith(`${dialog.entry.path}/`));
+                return html`
+                  <button
+                    class="move-row"
+                    ?disabled=${forbidden}
+                    title=${forbidden ? "A folder cannot move into itself" : child.path}
+                    @click=${() => { if (!forbidden) void this.#loadMoveDirectory(child.path); }}
+                  >
+                    <span class="leading" aria-hidden="true">${folderIcon()}</span>${child.name}
+                  </button>
+                `;
+              })}
         </div>
         ${insideItself ? html`<p class="move-hint">A folder cannot move into itself.</p>` : alreadyHere ? html`<p class="move-hint">Already in this folder.</p>` : ""}
         ${dialog.error === undefined ? "" : html`<p class="dialog-error">${dialog.error}</p>`}

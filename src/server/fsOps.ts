@@ -173,7 +173,7 @@ export async function renamePath(input: RenameRequest): Promise<RenameResponse> 
 
   const destination = await lstat(to).catch((error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? undefined : Promise.reject(error)));
   if (destination !== undefined && input.overwrite !== true) {
-    throw new Failure("EEXIST", "Destination already exists", to);
+    throw new Failure("EEXIST", "A file or folder with that name already exists", to);
   }
   await rename(from, to);
   return { path: to };
