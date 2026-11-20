@@ -68,13 +68,16 @@ interface MenuState {
 export class FileManagerPanel extends LitElement {
   static override styles = css`
     :host { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--pi-text); background: var(--pi-bg); font-size: 13px; }
-    .toolbar { gap: 8px; border-bottom: 1px solid var(--pi-border-muted); }
+    .toolbar { gap: 0; border-bottom: 1px solid var(--pi-border-muted); }
     .breadcrumbs { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 2px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; cursor: text; align-self: stretch; }
     .crumb { flex: 0 0 auto; border: 0; border-radius: 6px; background: none; color: var(--pi-muted); padding: 3px 5px; font: inherit; font-family: var(--pi-mono, ui-monospace, monospace); cursor: pointer; }
     .crumb:hover { background: var(--pi-surface); color: var(--pi-text); }
     .crumb.current { color: var(--pi-text); }
     .separator { flex: 0 0 auto; color: var(--pi-dim); }
-    .address { flex: 1 1 auto; min-width: 0; box-sizing: border-box; border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-surface); color: var(--pi-text); padding: 4px 7px; font: inherit; font-family: var(--pi-mono, ui-monospace, monospace); direction: ltr; }
+    /* .ui-input scaled to a 32px toolbar row: the field fills the row from the
+       panel edge to the first button, so there is no seam to look unfinished. */
+    .address.ui-input { flex: 1 1 auto; align-self: stretch; width: auto; min-width: 0; min-height: 0; height: auto; border: 0; border-radius: 0; background: var(--pi-bg); color: var(--pi-text); padding: 0 10px; font: 13px/1.4 var(--pi-mono, ui-monospace, monospace); direction: ltr; }
+    .address.ui-input:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
     main { flex: 1; display: grid; grid-template-rows: minmax(160px, 34%) minmax(0, 1fr); min-height: 0; }
     .list { overflow: auto; min-height: 0; border-bottom: 1px solid var(--pi-border); }
     .row-wrap { position: relative; }
@@ -645,7 +648,7 @@ export class FileManagerPanel extends LitElement {
     if (this.#editing) {
       return html`
         <input
-          class="address"
+          class="ui-input address"
           dir="ltr"
           spellcheck="false"
           autocomplete="off"
