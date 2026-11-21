@@ -78,6 +78,8 @@ type DialogState =
     /** The new name is taken; offer to replace instead of refusing. */
     readonly canReplace?: boolean | undefined;
     readonly conflictKind?: ConflictKind | undefined;
+    /** The name that is taken, so the action stays disabled until it changes. */
+    readonly blockedName?: string | undefined;
   }
   | { readonly kind: "delete"; readonly entry: FileEntry; readonly plan: DeletePlan; readonly error?: string }
   | { readonly kind: "replace"; readonly file: File; readonly error?: string }
@@ -598,7 +600,7 @@ export class FileManagerPanel extends LitElement {
     if (client === undefined) return;
     const dialog = this.#dialog;
     if (dialog?.kind !== "move") return;
-    this.#dialog = { ...dialog, directory, directories: undefined, error: undefined, canReplace: false };
+    this.#dialog = { ...dialog, directory, directories: undefined, error: undefined, canReplace: false, conflictKind: undefined };
     this.requestUpdate();
     const result = await client.list(directory);
     const current = this.#dialog;
@@ -626,7 +628,7 @@ export class FileManagerPanel extends LitElement {
       // The server's code is the contract; the sentence is this dialog's, so a
       // wording fix lands with a reload instead of a daemon restart.
       if (result.error.code !== "EEXIST") {
-        this.#dialog = { ...dialog, error: result.error.message, canReplace: false };
+        this.#dialog = { ...dialog, error: result.error.message, canReplace: false, conflictKind: undefined };
         this.requestUpdate();
         return;
       }
@@ -665,6 +667,9 @@ export class FileManagerPanel extends LitElement {
     const directory = this.#directory ?? "/";
 
     if (dialog.kind === "rename") {
+      // The action is disabled while this exact name is known to be taken;
+      // Enter must not be a way around the disabled button.
+      if (dialog.blockedName !== undefined && dialog.canReplace !== true && name === dialog.blockedName) return;
       const target = joinPath(parentPath(dialog.entry.path), name);
       const result = await client.rename(dialog.entry.path, target, overwrite);
       if (result.ok === false) {
@@ -679,6 +684,7 @@ export class FileManagerPanel extends LitElement {
           error: `A ${conflictKind} with that name already exists.`,
           canReplace: isReplaceable(kindOf(dialog.entry), conflictKind),
           conflictKind,
+          blockedName: name,
         };
         this.requestUpdate();
         return;
@@ -929,7 +935,11 @@ export class FileManagerPanel extends LitElement {
           .value=${dialog.draft}
           @input=${(event: Event) => {
             const draft = (event.target as HTMLInputElement).value;
-            this.#dialog = { ...dialog, draft };
+            const cleared = dialog.kind === "rename" && dialog.blockedName !== undefined && draft.trim() !== dialog.blockedName;
+            this.#dialog = cleared
+              ? { ...dialog, draft, error: undefined, blockedName: undefined, canReplace: false, conflictKind: undefined }
+              : { ...dialog, draft };
+            this.requestUpdate();
           }}
           @keydown=${(event: KeyboardEvent) => {
             if (event.key === "Enter") { event.preventDefault(); void this.#submitName(); }
@@ -941,7 +951,11 @@ export class FileManagerPanel extends LitElement {
           <button @click=${() => this.#cancelDialog()}>Cancel</button>
           ${replacing
             ? html`<button class="danger" @click=${() => void this.#submitName(true)}>Replace ${dialog.conflictKind ?? "item"}</button>`
-            : html`<button class="primary" @click=${() => void this.#submitName()}>${action}</button>`}
+            : html`<button
+                class="primary"
+                ?disabled=${dialog.kind === "rename" && dialog.blockedName !== undefined && dialog.draft.trim() === dialog.blockedName}
+                @click=${() => void this.#submitName()}
+              >${action}</button>`}
         </footer>
       </dialog>
     `;
@@ -957,7 +971,8 @@ export class FileManagerPanel extends LitElement {
     const insideItself = dialog.entry.kind === "directory"
       && (dialog.directory === dialog.entry.path || dialog.directory.startsWith(`${dialog.entry.path}/`));
     const alreadyHere = dialog.directory === parent;
-    const blocked = dialog.directories === undefined || insideItself || alreadyHere;
+    const stoppedByConflict = dialog.conflictKind !== undefined && dialog.canReplace !== true;
+    const blocked = dialog.directories === undefined || insideItself || alreadyHere || stoppedByConflict;
     return html`
       <dialog class="dialog move-dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
         <h2>Move ${dialog.entry.name}</h2>
