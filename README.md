@@ -4,7 +4,7 @@ A general filesystem browser for PI WEB: browse anywhere the daemon's user can r
 
 It exists because the bundled Files panel is rooted at the selected workspace, wraps inconsistently between view modes, and cannot rename, move or delete anything.
 
-**Status: browsing, editing and mutation are in.** The server half covers listing, stat, read, mkdir, rename, delete with a count, chunked upload and save, file download, and directory zip. The panel browses with clickable breadcrumbs that double as an address bar, a `..` row, the host's file-type icons and row styling, and previews text and images. Text files open in an editor with syntax highlighting, explicit saving and conflict handling. Rows can be renamed, moved through a destination picker, and deleted; folders can be created, uploaded into, and downloaded as a zip. Directory upload and the polish items remain; `PLAN.md` is the design record.
+**Status: browsing, editing and mutation are in.** The server half covers listing, stat, read, mkdir, rename, delete with a count, chunked upload and save, file download, and directory zip. The panel browses with clickable breadcrumbs that double as an address bar, a `..` row, the host's file-type icons and row styling, and previews text, images, Markdown documents and PDFs. Text files open in an editor with syntax highlighting, explicit saving and conflict handling; Markdown opens as a rendered document with the source one menu item away. Rows can be renamed, moved through a destination picker, and deleted; folders can be created, uploaded into, and downloaded as a zip. Directory upload and the polish items remain; `PLAN.md` is the design record.
 
 ## Install
 

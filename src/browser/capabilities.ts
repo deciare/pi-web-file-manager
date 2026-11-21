@@ -1,3 +1,5 @@
+import type { TemplateResult } from "lit";
+
 /**
  * Host capabilities this plugin uses, declared as structural types.
  *
@@ -18,6 +20,21 @@ export interface StylesheetIntegration {
   registerRoot(root: ShadowRoot, options?: { sharedUi?: boolean }): () => void;
   subscribe(listener: () => void): () => void;
   createController(host: object, options?: { sharedUi?: boolean }): void;
+}
+
+/**
+ * The host's own Markdown renderer, so a preview is parsed by the parser the
+ * rest of PI WEB uses — including whatever syntax extensions are enabled — and
+ * rendered under the document policy rather than a policy of our choosing.
+ */
+export interface MarkdownRenderRequest {
+  readonly machineId: string;
+  readonly text: string;
+  readonly truncated?: boolean;
+}
+
+export interface MarkdownRendering {
+  render(request: MarkdownRenderRequest): TemplateResult;
 }
 
 export interface CapabilityToken<Value> {
@@ -55,6 +72,18 @@ export const stylesheetIntegrationCapability: CapabilityToken<StylesheetIntegrat
   },
 };
 
+export const markdownRenderingCapability: CapabilityToken<MarkdownRendering> = {
+  pluginId: "pi-web",
+  id: "markdown-rendering",
+  version: 1,
+  parse(value) {
+    if (!isRecord(value) || typeof value["render"] !== "function") {
+      throw new Error("Markdown rendering capability v1 is unavailable");
+    }
+    return value as unknown as MarkdownRendering;
+  },
+};
+
 /**
  * Capabilities are resolved in `start`, which runs after contributions are
  * declared but before any panel renders. Elements are constructed by the host's
@@ -64,13 +93,15 @@ export const stylesheetIntegrationCapability: CapabilityToken<StylesheetIntegrat
 interface HostCapabilityState {
   icons: FileIcons | undefined;
   styles: StylesheetIntegration | undefined;
+  markdown: MarkdownRendering | undefined;
 }
 
-const state: HostCapabilityState = { icons: undefined, styles: undefined };
+const state: HostCapabilityState = { icons: undefined, styles: undefined, markdown: undefined };
 
 export function setHostCapabilities(next: HostCapabilityState): void {
   state.icons = next.icons;
   state.styles = next.styles;
+  state.markdown = next.markdown;
 }
 
 export function hostCapabilities(): Readonly<HostCapabilityState> {

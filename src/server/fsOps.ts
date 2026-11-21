@@ -94,8 +94,30 @@ export async function listDirectory(input: { path?: unknown; offset?: unknown; l
   };
 }
 
-/** True when the bytes look like text: no NUL in the sniff window. */
+/**
+ * Formats whose first bytes name them, and which are binary however printable
+ * the rest happens to be: a PDF with uncompressed ASCII streams has no NUL in
+ * its first 8 KiB, so the byte heuristic alone would offer it to the editor.
+ */
+const BINARY_SIGNATURES: readonly (readonly number[])[] = [
+  [0x25, 0x50, 0x44, 0x46], // %PDF
+  [0x50, 0x4b, 0x03, 0x04], // a zip, and every format built on one
+  [0x1f, 0x8b], // gzip
+  [0x89, 0x50, 0x4e, 0x47], // PNG
+  [0x47, 0x49, 0x46, 0x38], // GIF8
+  [0xff, 0xd8, 0xff], // JPEG
+  [0x7f, 0x45, 0x4c, 0x46], // ELF
+  [0x25, 0x21, 0x50, 0x53], // %!PS
+];
+
+function hasSignature(firstBytes: Uint8Array): boolean {
+  return BINARY_SIGNATURES.some((signature) => signature.length <= firstBytes.length
+    && signature.every((byte, index) => firstBytes[index] === byte));
+}
+
+/** True when the bytes are not text: a known binary signature, or a NUL in the sniff window. */
 export function looksBinary(firstBytes: Uint8Array): boolean {
+  if (hasSignature(firstBytes)) return true;
   for (const byte of firstBytes) if (byte === 0) return true;
   return false;
 }

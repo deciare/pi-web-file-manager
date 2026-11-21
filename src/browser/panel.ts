@@ -40,6 +40,7 @@ const rememberedDirectories = new Map<string, string>();
 const HIDDEN_PREFERENCE_KEY = "pi-web.file-manager.show-hidden";
 const WRAP_PREFERENCE_KEY = "pi-web.file-manager.wrap";
 const FULL_HEIGHT_KEY = "pi-web.file-manager.full-height";
+const MARKDOWN_PREVIEW_KEY = "pi-web.file-manager.markdown-preview";
 
 interface Preview {
   readonly entry: FileEntry;
@@ -149,6 +150,10 @@ export class FileManagerPanel extends LitElement {
     main.full .list { display: none; }
     .list, .viewer { min-width: 0; }
     .viewer-body.editing { overflow: hidden; display: flex; min-height: 0; }
+    /* The host's document renderer supplies the typography; this is only the
+       frame, so a long document scrolls inside the panel instead of resizing it. */
+    .viewer-body.document { overflow: auto; min-height: 0; padding: 4px 16px 16px; }
+    .viewer-body embed.pdf { display: block; flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; border: 0; background: var(--pi-bg); }
     fm-editor { flex: 1 1 auto; min-width: 0; min-height: 0; }
     .viewer-head .dirty-dot { color: var(--pi-warning); padding-inline-end: 6px; }
     .list { overflow: auto; min-height: 0; border-bottom: 1px solid var(--pi-border); }
@@ -238,6 +243,8 @@ export class FileManagerPanel extends LitElement {
   #showHidden = readHiddenPreference();
   #wrap = readToggle(WRAP_PREFERENCE_KEY, true);
   #fullHeight = readToggle(FULL_HEIGHT_KEY, false);
+  /** Markdown opens as a document; the source is one menu item away. */
+  #markdownPreview = readToggle(MARKDOWN_PREVIEW_KEY, true);
   #dirty = false;
   #saving = false;
   /** The text as it was when read or last saved: the baseline for "changed". */
@@ -538,6 +545,25 @@ export class FileManagerPanel extends LitElement {
     this.#wrap = !this.#wrap;
     writeToggle(WRAP_PREFERENCE_KEY, this.#wrap);
     this.#closeMenu();
+  }
+
+  #toggleMarkdownPreview(): void {
+    this.#markdownPreview = !this.#markdownPreview;
+    writeToggle(MARKDOWN_PREVIEW_KEY, this.#markdownPreview);
+    this.#closeMenu();
+    this.requestUpdate();
+  }
+
+  /**
+   * Whether the open file is being shown as a document rather than as source.
+   * Only Markdown qualifies, only with the renderer available, and never while
+   * the editor holds unsaved text: the document has no editor to keep it.
+   */
+  #showingDocument(): boolean {
+    const preview = this.#preview;
+    if (preview === undefined || preview.text === undefined) return false;
+    return this.#markdownPreview && isMarkdown(preview.entry.name) && !this.#dirty
+      && hostCapabilities().markdown !== undefined && this.#context?.machine.id !== undefined;
   }
 
   #closePreview(): void {
@@ -1088,6 +1114,10 @@ export class FileManagerPanel extends LitElement {
     return html`<button role="menuitem" class=${className} @click=${(event: Event) => { event.stopPropagation(); run(); }}>${label}</button>`;
   }
 
+  #menuItemBlocked(label: string, reason: string): unknown {
+    return html`<button role="menuitem" disabled title=${reason}>${label}</button>`;
+  }
+
   #renderMenu() {
     const menu = this.#menu;
     if (menu === undefined) return "";
@@ -1103,7 +1133,12 @@ export class FileManagerPanel extends LitElement {
               ? ""
               : this.#menuItem("Copy relative path", () => { this.#closeMenu(); this.#copyText(this.#relativePath(this.#preview?.entry.path ?? "") ?? ""); })}
             <hr>
-            ${this.#menuItem(this.#wrap ? "Wrap lines ✓" : "Wrap lines", () => this.#toggleWrap())}
+            ${this.#preview !== undefined && isMarkdown(this.#preview.entry.name) && hostCapabilities().markdown !== undefined
+              ? this.#dirty
+                ? this.#menuItemBlocked(this.#markdownPreview ? "Show source" : "Show preview", "Save your changes first")
+                : this.#menuItem(this.#markdownPreview ? "Show source" : "Show preview", () => this.#toggleMarkdownPreview())
+              : ""}
+            ${this.#showingDocument() ? "" : this.#menuItem(this.#wrap ? "Wrap lines ✓" : "Wrap lines", () => this.#toggleWrap())}
           `
           : entry === undefined
           ? html`
@@ -1409,6 +1444,14 @@ export class FileManagerPanel extends LitElement {
         </div>
       </div>`;
     if (preview.error !== undefined) return html`${head}<div class="notice error">${preview.error}</div>`;
+    if (preview.text !== undefined && this.#showingDocument()) {
+      const machineId = this.#context?.machine.id ?? "";
+      const markdown = hostCapabilities().markdown;
+      return html`${head}
+        <div class="viewer-body document">
+          ${markdown === undefined ? "" : markdown.render({ machineId, text: preview.text })}
+        </div>`;
+    }
     if (preview.text !== undefined) {
       return html`${head}
         <div class="viewer-body editing">
@@ -1423,6 +1466,12 @@ export class FileManagerPanel extends LitElement {
     }
     if (preview.previewUrl !== undefined && isImage(preview.entry.name)) {
       return html`${head}<div class="viewer-body"><img class="preview" src=${preview.previewUrl} alt=${preview.entry.name}></div>`;
+    }
+    /* A PDF is a document the browser already knows how to draw. The download
+       resource streams it as `application/pdf` with an inline disposition, which
+       is exactly what the viewer needs, so nothing is fetched or re-encoded here. */
+    if (preview.previewUrl !== undefined && isPdf(preview.entry.name)) {
+      return html`${head}<div class="viewer-body"><embed class="pdf" type="application/pdf" src=${preview.previewUrl} title=${preview.entry.name}></div>`;
     }
     if (preview.previewUrl !== undefined) {
       return html`${head}<div class="notice">Not shown inline (${preview.readOnlyReason ?? "unsupported"}).</div>`;
@@ -1472,6 +1521,14 @@ function downloadIcon() {
 
 function reloadIcon() {
   return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 5v6h-6"></path></svg>`;
+}
+
+function isPdf(name: string): boolean {
+  return /\.pdf$/iu.test(name);
+}
+
+function isMarkdown(name: string): boolean {
+  return /\.(md|markdown|mdown|mkd)$/iu.test(name);
 }
 
 function isImage(name: string): boolean {

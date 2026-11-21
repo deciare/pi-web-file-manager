@@ -1,22 +1,24 @@
 import { html, svg } from "lit";
 import { defineFileManagerPanel } from "./panel.ts";
 import {
-  fileIconsCapability, setHostCapabilities, stylesheetIntegrationCapability,
+  fileIconsCapability, markdownRenderingCapability, setHostCapabilities, stylesheetIntegrationCapability,
 } from "./capabilities.ts";
 
 /**
  * Browser half. One application panel, so the file manager is available with
  * or without a project selected and follows whichever machine is in view.
  *
- * `requires` names the two host capabilities that give the panel the rest of
- * PI WEB's appearance: the active file-icon theme and the shared UI stylesheet.
+ * `requires` names the host capabilities that give the panel the rest of
+ * PI WEB's appearance — the active file-icon theme, the shared UI stylesheet —
+ * and the host's Markdown renderer, so a Markdown preview is parsed and styled
+ * by the same code as the rest of the application.
  * Resolving them in `start` means an older host reports a missing capability
  * instead of rendering a panel with no icons and no row styling.
  */
 const plugin = {
   apiVersion: 5,
   name: "File manager",
-  requires: [fileIconsCapability, stylesheetIntegrationCapability],
+  requires: [fileIconsCapability, stylesheetIntegrationCapability, markdownRenderingCapability],
   activate(context: { selection?: unknown }) {
     defineFileManagerPanel();
     const selection = context.selection;
@@ -36,6 +38,7 @@ const plugin = {
         setHostCapabilities({
           icons: capabilities.resolve(fileIconsCapability),
           styles: capabilities.resolve(stylesheetIntegrationCapability),
+          markdown: capabilities.resolve(markdownRenderingCapability),
         });
       },
     };

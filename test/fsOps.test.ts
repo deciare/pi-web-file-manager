@@ -91,6 +91,23 @@ test("stat decides what can be edited", async () => {
   }
 });
 
+test("a binary format is recognised by its signature, not only by NUL bytes", async () => {
+  const box = await sandbox();
+  try {
+    // Printable throughout: the byte heuristic sees text, the signature does not.
+    await writeFile(box.path("printable.pdf"), "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n");
+    await writeFile(box.path("archive.zip"), "PK\u0003\u0004 and then printable bytes");
+    await writeFile(box.path("plain.txt"), "Prose about the four bytes %PDF that open a PDF.\n");
+
+    assert.equal((await statPath({ path: box.path("printable.pdf") })).readOnlyReason, "binary");
+    assert.equal((await statPath({ path: box.path("archive.zip") })).readOnlyReason, "binary");
+    assert.equal((await statPath({ path: box.path("plain.txt") })).editable, true);
+    await assert.rejects(() => readTextFile({ path: box.path("printable.pdf") }), (error: unknown) => error instanceof Failure && error.code === "EBINARY");
+  } finally {
+    await box.cleanup();
+  }
+});
+
 test("reads text as base64 and refuses what is not editable", async () => {
   const box = await sandbox();
   try {
