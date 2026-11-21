@@ -8,6 +8,9 @@ import { FileEditor, defineFileEditor } from "./editor.ts";
 import {
   baseName, breadcrumbSegments, formatSize, isHiddenName, joinPath, parentPath, relativeToRoot, resolveAddress,
 } from "./breadcrumbs.ts";
+import {
+  directoriesToCreate, parentRelative, uploadAction, type UploadItem, type UploadPolicy,
+} from "./uploads.ts";
 
 /**
  * The browse panel.
@@ -89,7 +92,12 @@ type DialogState =
     readonly blockedName?: string | undefined;
   }
   | { readonly kind: "delete"; readonly entry: FileEntry; readonly plan: DeletePlan; readonly error?: string }
-  | { readonly kind: "replace"; readonly file: File; readonly error?: string }
+  | {
+    readonly kind: "uploadBatch";
+    readonly total: number;
+    /** How many of the items land on a name that is already taken. */
+    readonly conflicts: number;
+  }
   | {
     readonly kind: "save";
     readonly entry: FileEntry;
@@ -251,7 +259,14 @@ export class FileManagerPanel extends LitElement {
   #savedText: string | undefined;
   /** What to do once the user agrees to lose their edits. */
   #pendingNavigation: (() => void) | undefined;
-  #uploading: { readonly name: string; readonly received: number; readonly total: number } | undefined;
+  #uploading: {
+    readonly name: string;
+    readonly received: number;
+    readonly total: number;
+    /** Position in the batch, so a long upload says how far along it is. */
+    readonly index: number;
+    readonly count: number;
+  } | undefined;
 
   constructor() {
     super();
@@ -663,7 +678,17 @@ export class FileManagerPanel extends LitElement {
 
   #askUpload(): void {
     this.#closeMenu();
-    this.renderRoot.querySelector<HTMLInputElement>("input[type=file]")?.click();
+    this.renderRoot.querySelector<HTMLInputElement>("input[type=file][multiple]:not([webkitdirectory])")?.click();
+  }
+
+  /**
+   * A folder pick is one attribute on the same control. The browser hands back a
+   * flat list of files, each carrying the path it had inside the picked folder,
+   * so the tree is rebuilt from those paths rather than walked.
+   */
+  #askUploadFolder(): void {
+    this.#closeMenu();
+    this.renderRoot.querySelector<HTMLInputElement>("input[webkitdirectory]")?.click();
   }
 
   #toggleHidden(): void {
@@ -967,66 +992,135 @@ export class FileManagerPanel extends LitElement {
     await this.#refresh();
   }
 
-  #pendingUploads: File[] = [];
+  #pendingUploads: UploadItem[] = [];
+  /** What is already at each item's destination, for the batch decision. */
+  #uploadExisting = new Map<string, number>();
 
-  #startUploads(files: File[]): void {
-    if (files.length === 0) return;
-    this.#pendingUploads = [...files];
-    void this.#processUploads();
+  #startUploads(items: UploadItem[]): void {
+    if (items.length === 0) return;
+    this.#pendingUploads = [...items];
+    this.#uploadExisting = new Map();
+    void this.#planUploads();
   }
 
-  async #processUploads(): Promise<void> {
+  /**
+   * Find out which names are taken, before anything at all is written.
+   *
+   * A folder pick arrives as a flat list, and asking file by file about a tree
+   * that half-exists would be a dialog per file, so the whole batch is planned
+   * first and answered once. Planning only reads: a cancel leaves the folder
+   * exactly as it was, folders included.
+   */
+  async #planUploads(): Promise<void> {
     const client = this.#client;
     const directory = this.#directory;
     if (client === undefined || directory === undefined) return;
-    while (this.#pendingUploads.length > 0) {
-      const file = this.#pendingUploads[0];
-      if (file === undefined) return;
-      this.#uploading = { name: file.name, received: 0, total: file.size };
-      this.requestUpdate();
-      const result = await client.upload(directory, file, new AbortController().signal, (received) => {
-        this.#uploading = { name: file.name, received, total: file.size };
-        this.requestUpdate();
-      });
-      this.#uploading = undefined;
-      if (result.ok === false && result.error.code === "EEXIST") {
-        // Keep the file at the head of the queue; the answer decides its fate.
-        this.#dialog = { kind: "replace", file };
-        this.requestUpdate();
-        return;
-      }
-      this.#pendingUploads.shift();
-      if (result.ok === false) {
-        this.#setStatus(`Upload failed: ${result.error.message}`);
-        this.#pendingUploads = [];
-        this.requestUpdate();
-        return;
-      }
-      this.#setStatus(`Uploaded ${file.name}`);
-      this.requestUpdate();
-    }
-    await this.#refresh();
-  }
+    const items = this.#pendingUploads;
 
-  async #confirmReplace(): Promise<void> {
-    const dialog = this.#dialog;
-    const client = this.#client;
-    const directory = this.#directory;
-    if (dialog?.kind !== "replace" || client === undefined || directory === undefined) return;
-    this.#dialog = undefined;
-    const file = this.#pendingUploads[0];
-    if (file === undefined) return;
-    const result = await client.upload(directory, file, new AbortController().signal, () => undefined, true);
-    this.#pendingUploads.shift();
-    if (result.ok === false) {
-      this.#setStatus(`Upload failed: ${result.error.message}`);
-      this.#pendingUploads = [];
-      this.requestUpdate();
+    let conflicts = 0;
+    for (const item of items) {
+      const info = await client.stat(joinPath(directory, item.relative));
+      if (info.ok === false) continue;
+      if (info.data.entry.kind === "directory") return this.#failUpload(`${item.relative} is a folder, not a file`);
+      this.#uploadExisting.set(item.relative, info.data.entry.mtimeMs);
+      conflicts += 1;
+    }
+
+    if (conflicts === 0) {
+      await this.#runUploadsNow("replace");
       return;
     }
-    this.#setStatus(`Replaced ${file.name}`);
+    this.#dialog = { kind: "uploadBatch", total: items.length, conflicts };
     this.requestUpdate();
-    await this.#processUploads();
+  }
+
+  #failUpload(message: string): void {
+    this.#setStatus(`Upload failed: ${message}`);
+    this.#pendingUploads = [];
+    this.#uploading = undefined;
+    this.requestUpdate();
+  }
+
+  #cancelUploads(): void {
+    this.#dialog = undefined;
+    this.#pendingUploads = [];
+    this.#uploadExisting = new Map();
+    this.requestUpdate();
+  }
+
+  #runUploads(policy: UploadPolicy): void {
+    this.#dialog = undefined;
+    void this.#runUploadsNow(policy);
+  }
+
+  /** Create the folders the batch needs, shallowest first, then write the files. */
+  async #createFolders(): Promise<boolean> {
+    const client = this.#client;
+    const directory = this.#directory;
+    if (client === undefined || directory === undefined) return false;
+    for (const relative of directoriesToCreate(this.#pendingUploads.map((item) => item.relative))) {
+      const target = joinPath(directory, relative);
+      const made = await client.mkdir(target);
+      if (made.ok === true) continue;
+      if (made.error.code !== "EEXIST") {
+        this.#failUpload(made.error.message);
+        return false;
+      }
+      // Already there is fine when it is a folder, and a dead end when a file
+      // holds the name: the folder cannot exist and its contents cannot land.
+      const info = await client.stat(target);
+      if (info.ok && info.data.entry.kind !== "directory") {
+        this.#failUpload(`${relative} is a file, not a folder`);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async #runUploadsNow(policy: UploadPolicy): Promise<void> {
+    const client = this.#client;
+    const directory = this.#directory;
+    if (client === undefined || directory === undefined) return;
+    const items = this.#pendingUploads;
+    if (!(await this.#createFolders())) return;
+    let written = 0;
+    let skipped = 0;
+    try {
+      for (const [index, item] of items.entries()) {
+        const action = uploadAction(item, this.#uploadExisting.get(item.relative), policy);
+        if (action === "skip") {
+          skipped += 1;
+          continue;
+        }
+        const target = joinPath(directory, item.relative);
+        const folder = parentRelative(item.relative);
+        this.#uploading = {
+          name: item.relative, received: 0, total: item.file.size, index: index + 1, count: items.length,
+        };
+        this.requestUpdate();
+        const result = await client.upload(
+          folder === "" ? directory : joinPath(directory, folder),
+          item.file,
+          new AbortController().signal,
+          (received) => {
+            this.#uploading = {
+              name: item.relative, received, total: item.file.size, index: index + 1, count: items.length,
+            };
+            this.requestUpdate();
+          },
+          { name: baseName(item.relative), overwrite: action === "replace" },
+        );
+        this.#uploading = undefined;
+        if (result.ok === false) return this.#failUpload(result.error.message);
+        written += 1;
+        this.requestUpdate();
+      }
+    } finally {
+      this.#pendingUploads = [];
+      this.#uploadExisting = new Map();
+    }
+    this.#setStatus(skipped === 0 ? `Uploaded ${countOf(written, "file")}` : `Uploaded ${countOf(written, "file")}, skipped ${String(skipped)}`);
+    await this.#refresh();
   }
 
   // ---- rendering ---------------------------------------------------------
@@ -1145,6 +1239,7 @@ export class FileManagerPanel extends LitElement {
             ${this.#menuItem("New folder…", () => this.#askNewFolder())}
             ${this.#menuItem("New file…", () => this.#askNewFile())}
             ${this.#menuItem("Upload files…", () => this.#askUpload())}
+            ${this.#menuItem("Upload folder…", () => this.#askUploadFolder())}
             ${this.#menuItem("Download this folder (.zip)", () => this.#downloadDirectory())}
             <hr>
             ${this.#menuItem(this.#showHidden ? "Hide hidden files" : "Show hidden files", () => this.#toggleHidden())}
@@ -1182,15 +1277,18 @@ export class FileManagerPanel extends LitElement {
       `;
     }
     if (dialog.kind === "move") return this.#renderMoveDialog(dialog);
-    if (dialog.kind === "replace") {
+    if (dialog.kind === "uploadBatch") {
+      const files = dialog.total === 1 ? "1 file" : `${String(dialog.total)} files`;
+      const taken = dialog.conflicts === 1 ? "1 name already exists" : `${String(dialog.conflicts)} names already exist`;
       return html`
         <dialog class="dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
-          <h2>Replace ${dialog.file.name}?</h2>
-          <p>A file with that name already exists in this folder.</p>
-          ${dialog.error === undefined ? "" : html`<p class="dialog-error">${dialog.error}</p>`}
+          <h2>Upload ${files}?</h2>
+          <p>${taken} in this folder. Nothing has been written yet.</p>
           <footer>
-            <button @click=${() => this.#cancelDialog()}>Cancel</button>
-            <button class="primary" @click=${() => void this.#confirmReplace()}>Replace</button>
+            <button @click=${() => this.#cancelUploads()}>Cancel</button>
+            <button class="primary" @click=${() => this.#runUploads("skip")}>Skip ${dialog.conflicts === 1 ? "it" : "them"}</button>
+            <button @click=${() => this.#runUploads("newer")}>Keep newer</button>
+            <button class="danger" @click=${() => this.#runUploads("replace")}>Replace all</button>
           </footer>
         </dialog>
       `;
@@ -1382,9 +1480,22 @@ export class FileManagerPanel extends LitElement {
         style="display:none"
         @change=${(event: Event) => {
           const input = event.target as HTMLInputElement;
-          const files = Array.from(input.files ?? []);
+          const items = pickedItems(input.files);
           input.value = "";
-          this.#startUploads(files);
+          this.#startUploads(items);
+        }}
+      >
+      <input
+        class="visually-hidden"
+        type="file"
+        webkitdirectory
+        aria-hidden="true"
+        style="display:none"
+        @change=${(event: Event) => {
+          const input = event.target as HTMLInputElement;
+          const items = pickedItems(input.files);
+          input.value = "";
+          this.#startUploads(items);
         }}
       >
       ${this.#error === undefined ? "" : html`<div class="notice error">${this.#error}</div>`}
@@ -1406,7 +1517,7 @@ export class FileManagerPanel extends LitElement {
         ${this.#preview === undefined ? "" : html`<div class="viewer">${this.#renderViewer()}</div>`}
       </main>
       <div class="status-stack">
-        ${this.#uploading === undefined ? "" : html`<div class="status" role="status">Uploading ${this.#uploading.name} — ${formatSize(this.#uploading.received)} of ${formatSize(this.#uploading.total)}</div>`}
+        ${this.#uploading === undefined ? "" : html`<div class="status" role="status">Uploading ${this.#uploading.name}${this.#uploading.count > 1 ? ` (${String(this.#uploading.index)} of ${String(this.#uploading.count)})` : ""} — ${formatSize(this.#uploading.received)} of ${formatSize(this.#uploading.total)}</div>`}
         ${this.#status === undefined ? "" : html`<div class="status" role="status">${this.#status}</div>`}
       </div>
       ${this.#renderMenu()}
@@ -1565,4 +1676,16 @@ function writeToggle(key: string, value: boolean): void {
   } catch {
     // A browser that refuses storage keeps the toggle for this page only.
   }
+}
+
+/** A picker's files as upload items, keeping the path each has inside a folder pick. */
+function pickedItems(files: FileList | null): UploadItem[] {
+  return Array.from(files ?? []).map((file) => ({
+    file,
+    relative: (file as File & { readonly webkitRelativePath?: string }).webkitRelativePath || file.name,
+  }));
+}
+
+function countOf(count: number, noun: string): string {
+  return count === 1 ? `1 ${noun}` : `${String(count)} ${noun}s`;
 }

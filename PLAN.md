@@ -79,7 +79,9 @@ Resources: `download` (one file), `zip` (one directory tree, deflate, no symlink
    A PDF is displayed by the browser. The download resource already streams it as `application/pdf` with an inline disposition, so the viewer embeds that URL directly — no fetch, no re-encoding, no size cap, and the native viewer's own controls and page navigation. The daemon classifies it as binary by its `%PDF` signature first and by its bytes second, because a PDF whose streams are uncompressed ASCII contains no NUL byte and would otherwise open in the text editor.
 3. **Mutate.** New file, new folder, rename, move (dialog) with a resolution step when the destination name is taken, delete with confirmation and item count, upload files, upload a directory tree, download a directory as zip.
 
-   Built: everything except uploading a directory tree, which needs `webkitdirectory` on the browser side and a server change, because the upload channel refuses to create intermediate directories.
+   Built: all of it, including a folder tree. `webkitdirectory` on a second file input returns the pick as a flat list of files that each carry their path inside the picked folder, so the tree is rebuilt from those paths rather than walked; the folders come from the existing `mkdir` op, shallowest first, and the files follow through the ordinary upload channel.
+
+   A batch is planned before it is written: every destination is checked for a name already taken, and if any is, one dialog asks about the whole batch — cancel, skip the taken names, keep whichever file is newer by mtime, or replace them. Nothing at all is written until that answer arrives, folders included, so cancelling leaves the destination exactly as it was. Asking per file would be a dialog per file for a tree that half-exists, which is the case that matters.
 
 4. **Polish.** Drag-and-drop move, in-directory filter, "open terminal here" if the Terminal plugin exposes a way to open a shell at an existing directory (otherwise dropped rather than hacked), and the deep links promised under Panel shape.
 

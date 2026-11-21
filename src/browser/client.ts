@@ -11,6 +11,13 @@ import { isEntry, isRecord } from "../shared/protocol.ts";
  * should say so plainly instead of rendering `undefined`.
  */
 
+export interface UploadOptions {
+  /** Replace a file already at the destination, having asked about it beforehand. */
+  readonly overwrite?: boolean;
+  /** The name to write under, when it is not the file's own — a nested upload. */
+  readonly name?: string;
+}
+
 export interface FileManagerClient {
   list(path: string, signal?: AbortSignal): Promise<Result<{ path: string; parent: string | null; entries: FileEntry[]; total: number; truncated: boolean }>>;
   stat(path: string, signal?: AbortSignal): Promise<Result<{ entry: FileEntry; editable: boolean; readOnlyReason?: "size" | "binary" | "directory" }>>;
@@ -21,7 +28,7 @@ export interface FileManagerClient {
   remove(path: string, recursive: boolean): Promise<Result<{ removed: number }>>;
   downloadUrl(path: string): string | undefined;
   zipUrl(path: string): string | undefined;
-  upload(directory: string, file: File, signal: AbortSignal, onProgress: (received: number) => void, overwrite?: boolean): Promise<Result<{ path: string; size: number; mtimeMs: number }>>;
+  upload(directory: string, file: File, signal: AbortSignal, onProgress: (received: number) => void, options?: UploadOptions): Promise<Result<{ path: string; size: number; mtimeMs: number }>>;
   save(path: string, expectedMtimeMs: number | null, text: string, signal: AbortSignal, force?: boolean): Promise<Result<{ path: string; size: number; mtimeMs: number }>>;
 }
 
@@ -216,11 +223,16 @@ export function createClient(peer: Peer): FileManagerClient {
     remove: (path, recursive) => call(peer, "delete", { path, recursive }, isRemoved),
     downloadUrl: (path) => peer.resourceUrl?.("download", { path }),
     zipUrl: (path) => peer.resourceUrl?.("zip", { path }),
-    upload: (directory, file, signal, onProgress, overwrite) =>
+    upload: (directory, file, signal, onProgress, options) =>
       sendContent(
         peer,
         "upload",
-        { path: directory, name: file.name, size: file.size, ...(overwrite === true ? { overwrite: true } : {}) },
+        {
+          path: directory,
+          name: options?.name ?? file.name,
+          size: file.size,
+          ...(options?.overwrite === true ? { overwrite: true } : {}),
+        },
         () => chunked(file, CONTENT_CHUNK_BYTES),
         signal,
         onProgress,
