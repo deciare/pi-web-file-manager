@@ -1,16 +1,20 @@
 /**
- * Install this package into a PI WEB packages directory.
+ * Install this plugin into PI WEB's plugins directory.
  *
- *   node scripts/install.js                      # $PI_WEB_DATA_DIR/packages
- *   node scripts/install.js /data/pi-web/packages
- *   node scripts/install.js --dir /tmp/packages
+ *   node scripts/install.js                      # $PI_WEB_DATA_DIR/plugins
+ *   node scripts/install.js /data/pi-web/plugins
+ *   node scripts/install.js --dir /tmp/plugins
  *
- * The argument is the *packages directory*, not this package's directory inside
- * it: the destination is always `<packages>/<plugin id>`. The source tree is
- * canonical and the installed copy is output, so this replaces the destination
- * whole — but only after proving the destination is absent, empty, or a
- * previous install of this same package. It never deletes a directory it cannot
- * identify, and a failed copy leaves the previous install in place.
+ * The argument is the *plugins directory*, not this plugin's directory inside
+ * it: the destination is always `<plugins>/<plugin id>`. This is a PI WEB
+ * plugin and nothing else — it carries no Pi extension, so it is not installed
+ * as a Pi package and does not belong in the agent's package settings.
+ *
+ * The source tree is canonical and the installed copy is output, so this
+ * replaces the destination whole — but only after proving the destination is
+ * absent, empty, or a previous install of this same plugin. It never deletes a
+ * directory it cannot identify, and a failed copy leaves the previous install
+ * in place.
  *
  * The browser half is served from `browserRoot`, so the bundle has to exist in
  * the installed copy: this builds first, and refuses to install if the build
@@ -33,26 +37,23 @@ if (typeof packageName !== "string" || typeof pluginId !== "string") {
   fail("the source package.json does not declare piWeb.plugins[0].id");
 }
 
-const packagesDirectory = resolve(selectArgument());
-const destination = join(packagesDirectory, pluginId);
+const pluginsDirectory = resolve(selectArgument());
+const destination = join(pluginsDirectory, pluginId);
 
-// ---- the argument must be a packages directory, and nothing else -------------
+// ---- the argument must be the plugins directory PI WEB discovers ------------
 
-if (packagesDirectory === root) fail("that is the source tree, not a packages directory");
-if (packagesDirectory.startsWith(`${root}/`)) fail("refusing to install inside the source tree");
-if (await isFile(packagesDirectory)) fail(`${packagesDirectory} is a file, not a directory`);
-if (await isOurs(packagesDirectory)) {
-  fail(`${packagesDirectory} is a copy of this plugin, not the packages directory that contains it`);
+if (pluginsDirectory === root) fail("that is the source tree, not the plugins directory");
+if (pluginsDirectory.startsWith(`${root}/`)) fail("refusing to install inside the source tree");
+if (await isFile(pluginsDirectory)) fail(`${pluginsDirectory} is a file, not a directory`);
+if (await isOurs(pluginsDirectory)) {
+  fail(`${pluginsDirectory} is a copy of this plugin, not the plugins directory that contains it`);
 }
-if (!(await isDirectory(packagesDirectory))) fail(`${packagesDirectory} does not exist; pass the packages directory that contains ${pluginId}`);
-if (basename(packagesDirectory) === pluginId) {
-  fail(`${packagesDirectory} is already named ${pluginId}; pass its parent directory instead`);
+if (!(await isDirectory(pluginsDirectory))) fail(`${pluginsDirectory} does not exist; pass the plugins directory that contains ${pluginId}`);
+if (basename(pluginsDirectory) === pluginId) {
+  fail(`${pluginsDirectory} is already named ${pluginId}; pass its parent directory instead`);
 }
-if (basename(packagesDirectory) === "plugins") {
-  fail(`${packagesDirectory} is a PI WEB plugins directory; a package that declares piWeb.plugins is installed under a packages directory and listed in Pi's packages, not copied into plugins`);
-}
-if (await isDirectory(join(packagesDirectory, "plugins"))) {
-  fail(`${packagesDirectory} looks like the PI WEB data directory; pass a packages subdirectory, such as its "packages"`);
+if (basename(pluginsDirectory) !== "plugins") {
+  fail(`${pluginsDirectory} is not a plugins directory; PI WEB discovers local plugins in $PI_WEB_DATA_DIR/plugins, so the directory has to be named "plugins"`);
 }
 
 // ---- the destination must be absent, empty, or a previous install of ours ---
@@ -98,8 +99,8 @@ try {
 
 // ---- stage, then swap: a failed copy leaves the previous install intact -----
 
-const staging = join(packagesDirectory, `.${pluginId}.incoming`);
-const previous = join(packagesDirectory, `.${pluginId}.previous`);
+const staging = join(pluginsDirectory, `.${pluginId}.incoming`);
+const previous = join(pluginsDirectory, `.${pluginId}.previous`);
 await rm(staging, { recursive: true, force: true });
 try {
   await cp(root, staging, {
@@ -120,13 +121,13 @@ try {
 }
 
 console.log(`installed ${packageName} to ${destination}`);
-console.log("next: list it in the agent's Pi packages, restart the session daemon, then reload the page");
+console.log("next: restart the session daemon, then reload the page");
 
 function selectArgument() {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
-    console.log("usage: node scripts/install.js [--dir] [packages-directory]");
-    console.log(`default: ${defaultPackagesDirectory()}`);
+    console.log("usage: node scripts/install.js [--dir] [plugins-directory]");
+    console.log(`default: ${defaultPluginsDirectory()}`);
     process.exit(0);
   }
   const flagIndex = args.findIndex((argument) => argument === "--dir" || argument === "--destination");
@@ -136,13 +137,13 @@ function selectArgument() {
     return value;
   }
   const positional = args.find((argument) => !argument.startsWith("-"));
-  return positional ?? defaultPackagesDirectory();
+  return positional ?? defaultPluginsDirectory();
 }
 
-function defaultPackagesDirectory() {
+function defaultPluginsDirectory() {
   const dataDir = process.env["PI_WEB_DATA_DIR"];
   const base = dataDir !== undefined && dataDir.trim() !== "" ? dataDir : join(homedir(), ".pi-web");
-  return join(base, "packages");
+  return join(base, "plugins");
 }
 
 async function isOurs(directory) {

@@ -4,9 +4,6 @@
   "private": true,
   "type": "module",
   "description": "General filesystem browser, editor, and file manager for PI WEB",
-  "pi": {
-    "extensions": []
-  },
   "piWeb": {
     "plugins": [
       {

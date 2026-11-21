@@ -90,7 +90,9 @@ Each phase is usable on its own; nothing in an earlier phase depends on a later 
 
 ## Packaging
 
-Package `@house/pi-web-file-manager`, plugin id `file-manager`, installed into `$PI_WEB_DATA_DIR/packages/pi-web-file-manager` as one package serving both halves. Both halves are bundled with esbuild: the browser half inlines lit and CodeMirror and imports nothing bare at runtime; the server half is Node ESM with only `node:` builtins external. The canonical tree is this one.
+Package `@house/pi-web-file-manager`, plugin id `file-manager`, installed into `$PI_WEB_DATA_DIR/plugins/file-manager`.
+
+Local plugin discovery is a directory named after the plugin id under that root, read for its `piWeb` declaration — no Pi package entry, because this plugin carries no Pi extension. That was the wrong home for a while: as a Pi package it was scanned for extensions it did not have, and the agent's package fallback turned the whole directory into one unloadable extension. Both halves are bundled with esbuild: the browser half inlines lit and CodeMirror and imports nothing bare at runtime; the server half is Node ESM with only `node:` builtins external. The canonical tree is this one.
 
 ## Open questions
 

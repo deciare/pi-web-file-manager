@@ -4,29 +4,19 @@ A general filesystem browser for PI WEB: browse anywhere the daemon's user can r
 
 It exists because the bundled Files panel is rooted at the selected workspace, wraps inconsistently between view modes, and cannot rename, move or delete anything.
 
-**Status: phase one, in progress.** The server half is complete and tested: listing, stat, read, mkdir, rename, delete with a count, chunked upload and save, file download, and directory zip. The panel browses with clickable breadcrumbs that double as an address bar, a `..` row, the host's file-type icons and row styling, and previews text and images. A toolbar menu creates folders and files, uploads, downloads the current folder as a zip, and toggles hidden files; each row has a menu for open, download, copy path, rename and delete. The editor, move, and directory-upload trees are the next phases. `PLAN.md` is the design record.
+**Status: browsing, editing and mutation are in.** The server half covers listing, stat, read, mkdir, rename, delete with a count, chunked upload and save, file download, and directory zip. The panel browses with clickable breadcrumbs that double as an address bar, a `..` row, the host's file-type icons and row styling, and previews text and images. Text files open in an editor with syntax highlighting, explicit saving and conflict handling. Rows can be renamed, moved through a destination picker, and deleted; folders can be created, uploaded into, and downloaded as a zip. Directory upload and the polish items remain; `PLAN.md` is the design record.
 
 ## Install
 
 ```sh
-node scripts/install.js                     # -> $PI_WEB_DATA_DIR/packages/file-manager
-node scripts/install.js /data/pi-web/packages
-node scripts/install.js --dir /tmp/packages
+node scripts/install.js                     # -> $PI_WEB_DATA_DIR/plugins/file-manager
+node scripts/install.js /data/pi-web/plugins
+node scripts/install.js --dir /tmp/plugins
 ```
 
-The argument is the *packages directory*; the package itself lands in `<packages>/file-manager`. Installation builds first, replaces the destination whole, and refuses to delete a directory it does not recognise as a previous install of this package.
+The argument is the *plugins directory*; the plugin itself lands in `<plugins>/file-manager`. Installation builds first, replaces the destination whole, and refuses to delete a directory it does not recognise as a previous install of this plugin.
 
-Then list it as a Pi package so PI WEB can discover it. **Settings → Pi packages** accepts a local source, or add the path — relative to the agent directory or absolute — to `packages` in the agent's `settings.json`:
-
-```json
-"../pi-web/packages/file-manager"
-```
-
-The `pi` field in `package.json` declares an empty `extensions` list on purpose: a
-package that declares no Pi resources at all is registered by the agent as a
-single extension pointing at the directory, which cannot be imported and fails
-with `Cannot find module`. This package's value is its PI WEB plugin, not a Pi
-extension.
+PI WEB discovers local plugins by reading `$PI_WEB_DATA_DIR/plugins`, so the directory has to be named `plugins` and the installed folder has to be named after the plugin id. Nothing else is needed: this is a PI WEB plugin with no Pi extension, so it is **not** a Pi package and does not go in the agent's package settings. Give it a Pi extension one day and that changes.
 
 Restart the session daemon and reload the page. A server-backed plugin is loaded by the daemon at start, so a browser reload alone will not pick it up; restarting interrupts live sessions and terminals, so choose a quiet moment. The panel appears as a **File manager** tab.
 
