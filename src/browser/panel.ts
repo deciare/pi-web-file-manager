@@ -133,11 +133,15 @@ export class FileManagerPanel extends LitElement {
     .address.ui-input { flex: 1 1 auto; align-self: stretch; width: auto; min-width: 0; min-height: 0; height: auto; border: 0; border-radius: 0; background: var(--pi-bg); color: var(--pi-text); padding: 0 10px; font: 13px/1.4 var(--pi-mono, ui-monospace, monospace); direction: ltr; }
     .address.ui-input:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
     /* One column that cannot grow past the panel: an unwrapped line inside the
-       editor must scroll within its own box, not stretch the header out of view. */
-    main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(160px, 34%) minmax(0, 1fr); min-height: 0; }
-    .list, .viewer { min-width: 0; }
+       editor must scroll within its own box, not stretch the header out of view.
+       Rows depend on whether anything is open: a viewer with no file in it is
+       dead space, and full height means the file instead of the listing. */
+    main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
+    main.alone { grid-template-rows: minmax(0, 1fr); }
+    main.split { grid-template-rows: minmax(160px, 34%) minmax(0, 1fr); }
     main.full { grid-template-rows: minmax(0, 1fr); }
     main.full .list { display: none; }
+    .list, .viewer { min-width: 0; }
     .viewer-body.editing { overflow: hidden; display: flex; min-height: 0; }
     fm-editor { flex: 1 1 auto; min-width: 0; min-height: 0; }
     .viewer-head .dirty-dot { color: var(--pi-warning); padding-inline-end: 6px; }
@@ -524,6 +528,21 @@ export class FileManagerPanel extends LitElement {
     this.#closeMenu();
   }
 
+  #closePreview(): void {
+    if (this.#dirty) {
+      this.#askDiscard(() => this.#clearPreview());
+      return;
+    }
+    this.#clearPreview();
+  }
+
+  #clearPreview(): void {
+    this.#preview = undefined;
+    this.#savedText = undefined;
+    this.#dirty = false;
+    this.requestUpdate();
+  }
+
   #toggleFullHeight(): void {
     this.#fullHeight = !this.#fullHeight;
     writeToggle(FULL_HEIGHT_KEY, this.#fullHeight);
@@ -551,7 +570,7 @@ export class FileManagerPanel extends LitElement {
   #startEditingPath(): void {
     if (this.#editing) return;
     this.#editing = true;
-    this.#draft = this.#directory ?? "";
+    this.#draft = this.#crumbPath() ?? "";
     this.requestUpdate();
   }
 
@@ -979,6 +998,14 @@ export class FileManagerPanel extends LitElement {
     return this.#entries.filter((entry) => !isHiddenName(entry.name));
   }
 
+  /**
+   * What the address bar describes: the file in full height, because that is
+   * the whole panel then, and the directory otherwise.
+   */
+  #crumbPath(): string | undefined {
+    return this.#fullHeight && this.#preview !== undefined ? this.#preview.entry.path : this.#directory;
+  }
+
   #renderBreadcrumbs() {
     if (this.#editing) {
       return html`
@@ -998,7 +1025,7 @@ export class FileManagerPanel extends LitElement {
         >
       `;
     }
-    const directory = this.#directory;
+    const directory = this.#crumbPath();
     if (directory === undefined) return html`<span class="crumb current">…</span>`;
     return breadcrumbSegments(directory).map((segment, index, all) => html`
       ${index === 0 ? "" : html`<span class="separator" aria-hidden="true">/</span>`}
@@ -1065,7 +1092,6 @@ export class FileManagerPanel extends LitElement {
               : this.#menuItem("Copy relative path", () => { this.#closeMenu(); this.#copyText(this.#relativePath(this.#preview?.entry.path ?? "") ?? ""); })}
             <hr>
             ${this.#menuItem(this.#wrap ? "Wrap lines ✓" : "Wrap lines", () => this.#toggleWrap())}
-            ${this.#menuItem(this.#fullHeight ? "Full height ✓" : "Full height", () => this.#toggleFullHeight())}
           `
           : entry === undefined
           ? html`
@@ -1075,6 +1101,7 @@ export class FileManagerPanel extends LitElement {
             ${this.#menuItem("Download this folder (.zip)", () => this.#downloadDirectory())}
             <hr>
             ${this.#menuItem(this.#showHidden ? "Hide hidden files" : "Show hidden files", () => this.#toggleHidden())}
+            ${this.#menuItem(this.#fullHeight ? "Full height ✓" : "Full height", () => this.#toggleFullHeight())}
           `
           : html`
             ${this.#menuItem(entry.kind === "directory" ? "Download as .zip" : "Download", () => { this.#closeMenu(); this.#downloadEntry(entry); })}
@@ -1276,6 +1303,16 @@ export class FileManagerPanel extends LitElement {
     const entries = this.#visibleEntries();
     return html`
       <div class="ui-toolbar toolbar">
+        ${this.#fullHeight && this.#preview !== undefined
+          ? html`<div class="ui-toolbar-group">
+              <button
+                class="ui-button ui-button--compact ui-button--icon"
+                title="Back to files"
+                aria-label="Back to files"
+                @click=${() => this.#closePreview()}
+              >${backIcon()}</button>
+            </div>`
+          : ""}
         <div class="ui-toolbar-group breadcrumbs" @click=${(event: MouseEvent) => {
           if (this.#editing) return;
           if ((event.target as HTMLElement).closest(".crumb") !== null) return;
@@ -1314,7 +1351,7 @@ export class FileManagerPanel extends LitElement {
         }}
       >
       ${this.#error === undefined ? "" : html`<div class="notice error">${this.#error}</div>`}
-      <main class=${this.#fullHeight && this.#preview !== undefined ? "full" : ""}>
+      <main class=${this.#preview === undefined ? "alone" : this.#fullHeight ? "full" : "split"}>
         <div class="list ui-file-list" role="listbox" aria-label="Directory listing">
           ${atRoot ? "" : html`
             <button type="button" class="ui-button ui-file-row" title="Parent directory" @click=${() => void this.#openDirectory(this.#parent ?? "/")}>
@@ -1329,7 +1366,7 @@ export class FileManagerPanel extends LitElement {
             : entries.map((entry) => this.#renderRow(entry))}
           ${this.#truncated ? html`<div class="truncated">Showing the first ${String(entries.length)} of ${String(this.#total)} entries.</div>` : ""}
         </div>
-        <div class="viewer">${this.#renderViewer()}</div>
+        ${this.#preview === undefined ? "" : html`<div class="viewer">${this.#renderViewer()}</div>`}
       </main>
       <div class="status-stack">
         ${this.#uploading === undefined ? "" : html`<div class="status" role="status">Uploading ${this.#uploading.name} — ${formatSize(this.#uploading.received)} of ${formatSize(this.#uploading.total)}</div>`}
@@ -1411,6 +1448,10 @@ function keyFor(context: PanelContext | undefined, snapshot: SelectionSnapshot |
   if (workspaceId !== undefined) return `workspace:${workspaceId}`;
   const machineId = context?.machine.id;
   return machineId === undefined ? undefined : `machine:${machineId}`;
+}
+
+function backIcon() {
+  return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"></path><path d="m11 6-6 6 6 6"></path></svg>`;
 }
 
 function saveIcon() {
