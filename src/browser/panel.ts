@@ -132,7 +132,10 @@ export class FileManagerPanel extends LitElement {
        panel edge to the first button, so there is no seam to look unfinished. */
     .address.ui-input { flex: 1 1 auto; align-self: stretch; width: auto; min-width: 0; min-height: 0; height: auto; border: 0; border-radius: 0; background: var(--pi-bg); color: var(--pi-text); padding: 0 10px; font: 13px/1.4 var(--pi-mono, ui-monospace, monospace); direction: ltr; }
     .address.ui-input:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
-    main { flex: 1; display: grid; grid-template-rows: minmax(160px, 34%) minmax(0, 1fr); min-height: 0; }
+    /* One column that cannot grow past the panel: an unwrapped line inside the
+       editor must scroll within its own box, not stretch the header out of view. */
+    main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(160px, 34%) minmax(0, 1fr); min-height: 0; }
+    .list, .viewer { min-width: 0; }
     main.full { grid-template-rows: minmax(0, 1fr); }
     main.full .list { display: none; }
     .viewer-body.editing { overflow: hidden; display: flex; min-height: 0; }
@@ -152,6 +155,8 @@ export class FileManagerPanel extends LitElement {
     .viewer-action { box-sizing: border-box; align-self: stretch; display: inline-flex; align-items: center; min-height: 32px; border: 0; background: transparent; color: var(--pi-muted); font: 12px/20px var(--pi-font, system-ui, sans-serif); padding: 6px 8px; text-decoration: none; white-space: nowrap; cursor: pointer; }
     .viewer-actions > :not(small) + * { border-inline-start: 1px solid var(--pi-border-muted); }
     .viewer-action:hover { background: var(--pi-surface-hover); color: var(--pi-text); }
+    .viewer-action.icon { display: inline-flex; align-items: center; justify-content: center; padding-inline: 8px; color: var(--pi-muted); }
+    .viewer-action.icon:hover { color: var(--pi-text); }
     .viewer-body { flex: 1; overflow: auto; min-height: 0; }
     pre { margin: 0; padding: 10px; font-family: var(--pi-mono, monospace); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
     img.preview { max-width: 100%; display: block; margin: 10px auto; }
@@ -1053,7 +1058,10 @@ export class FileManagerPanel extends LitElement {
       }}>
         ${menu.viewer === true
           ? html`
-            ${this.#menuItem("Reload from disk", () => { this.#closeMenu(); void this.#reloadFromDisk(); })}
+            ${this.#menuItem("Copy path", () => { this.#closeMenu(); if (this.#preview !== undefined) this.#copyText(this.#preview.entry.path); })}
+            ${this.#preview === undefined || this.#relativePath(this.#preview.entry.path) === undefined
+              ? ""
+              : this.#menuItem("Copy relative path", () => { this.#closeMenu(); this.#copyText(this.#relativePath(this.#preview?.entry.path ?? "") ?? ""); })}
             <hr>
             ${this.#menuItem(this.#wrap ? "Wrap lines ✓" : "Wrap lines", () => this.#toggleWrap())}
             ${this.#menuItem(this.#fullHeight ? "Full height ✓" : "Full height", () => this.#toggleFullHeight())}
@@ -1341,10 +1349,9 @@ export class FileManagerPanel extends LitElement {
         <div class="viewer-actions">
           ${this.#dirty ? html`<button class="viewer-action dirty-save" ?disabled=${this.#saving} @click=${() => void this.#save()}>${this.#saving ? "Saving…" : "Save"}</button>` : ""}
           <small>${formatSize(preview.entry.size)}</small>
-          ${downloadUrl === undefined ? "" : html`<a class="viewer-action" href=${downloadUrl} download=${preview.entry.name}>Download</a>`}
-          <button class="viewer-action" @click=${() => this.#copyText(preview.entry.path)}>Copy path</button>
-          ${this.#relativePath(preview.entry.path) === undefined ? "" : html`<button class="viewer-action" @click=${() => this.#copyText(this.#relativePath(preview.entry.path) ?? "")}>Copy relative path</button>`}
-          <button class="viewer-action" aria-label="File actions" aria-haspopup="menu" @click=${(event: Event) => this.#openViewerMenu(event)}>⋯</button>
+          ${downloadUrl === undefined ? "" : html`<a class="viewer-action icon" title="Download" aria-label="Download" href=${downloadUrl} download=${preview.entry.name}>${downloadIcon()}</a>`}
+          <button class="viewer-action icon" title="Reload from disk" aria-label="Reload from disk" @click=${() => void this.#reloadFromDisk()}>${reloadIcon()}</button>
+          <button class="viewer-action" title="File actions" aria-label="File actions" aria-haspopup="menu" @click=${(event: Event) => this.#openViewerMenu(event)}>⋯</button>
         </div>
       </div>`;
     if (preview.error !== undefined) return html`${head}<div class="notice error">${preview.error}</div>`;
@@ -1395,6 +1402,14 @@ function keyFor(context: PanelContext | undefined, snapshot: SelectionSnapshot |
   if (workspaceId !== undefined) return `workspace:${workspaceId}`;
   const machineId = context?.machine.id;
   return machineId === undefined ? undefined : `machine:${machineId}`;
+}
+
+function downloadIcon() {
+  return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"></path><path d="m7.5 10.5 4.5 4.5 4.5-4.5"></path><path d="M5 19h14"></path></svg>`;
+}
+
+function reloadIcon() {
+  return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 5v6h-6"></path></svg>`;
 }
 
 function isImage(name: string): boolean {
