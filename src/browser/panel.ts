@@ -9,7 +9,8 @@ import {
   baseName, breadcrumbSegments, formatSize, isHiddenName, joinPath, parentPath, relativeToRoot, resolveAddress,
 } from "./breadcrumbs.ts";
 import {
-  directoriesToCreate, parentRelative, uploadAction, type UploadItem, type UploadPolicy,
+  conflictTree, directoriesToCreate, parentRelative, treeRows, uploadAction,
+  type UploadItem, type UploadPolicy,
 } from "./uploads.ts";
 
 /**
@@ -44,6 +45,8 @@ const HIDDEN_PREFERENCE_KEY = "pi-web.file-manager.show-hidden";
 const WRAP_PREFERENCE_KEY = "pi-web.file-manager.wrap";
 const FULL_HEIGHT_KEY = "pi-web.file-manager.full-height";
 const MARKDOWN_PREVIEW_KEY = "pi-web.file-manager.markdown-preview";
+/** Rows drawn in the conflict tree before it stops and says how many are left. */
+const CONFLICT_TREE_MAX_ROWS = 500;
 
 interface Preview {
   readonly entry: FileEntry;
@@ -95,8 +98,8 @@ type DialogState =
   | {
     readonly kind: "uploadBatch";
     readonly total: number;
-    /** How many of the items land on a name that is already taken. */
-    readonly conflicts: number;
+    /** The items whose destination name is already taken, as paths under the browsed folder. */
+    readonly conflicts: readonly string[];
   }
   | {
     readonly kind: "save";
@@ -209,7 +212,11 @@ export class FileManagerPanel extends LitElement {
     dialog.dialog button[disabled] { opacity: 0.5; cursor: not-allowed; }
     dialog.dialog button.primary { border-color: var(--pi-accent); background: var(--pi-accent); color: var(--pi-accent-contrast, #06121a); }
     dialog.dialog button.danger { border-color: var(--pi-danger); background: var(--pi-danger); color: #fff; }
-    dialog.dialog.move-dialog { width: min(480px, calc(100vw - 32px)); }
+    dialog.dialog.move-dialog, dialog.dialog.upload-dialog { width: min(480px, calc(100vw - 32px)); }
+    /* The rows are the host's file rows, so a conflicting path reads like a
+       listing does; only the frame around them is ours. */
+    .upload-list { max-height: min(400px, 50vh); overflow-y: auto; border: 1px solid var(--pi-border-muted); border-radius: 8px; margin: 0 0 4px; }
+    .upload-list .ui-file-row { cursor: default; }
     .move-path { margin: 0 0 8px; color: var(--pi-muted); font: 12px var(--pi-mono, ui-monospace, monospace); overflow-wrap: anywhere; }
     .move-list { max-height: min(320px, 45vh); overflow-y: auto; border: 1px solid var(--pi-border-muted); border-radius: 8px; }
     dialog.dialog .move-row { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; border-radius: 0; background: none; color: var(--pi-text); padding: 7px 9px; text-align: start; }
@@ -1017,16 +1024,16 @@ export class FileManagerPanel extends LitElement {
     if (client === undefined || directory === undefined) return;
     const items = this.#pendingUploads;
 
-    let conflicts = 0;
+    const conflicts: string[] = [];
     for (const item of items) {
       const info = await client.stat(joinPath(directory, item.relative));
       if (info.ok === false) continue;
       if (info.data.entry.kind === "directory") return this.#failUpload(`${item.relative} is a folder, not a file`);
       this.#uploadExisting.set(item.relative, info.data.entry.mtimeMs);
-      conflicts += 1;
+      conflicts.push(item.relative);
     }
 
-    if (conflicts === 0) {
+    if (conflicts.length === 0) {
       await this.#runUploadsNow("replace");
       return;
     }
@@ -1278,15 +1285,26 @@ export class FileManagerPanel extends LitElement {
     }
     if (dialog.kind === "move") return this.#renderMoveDialog(dialog);
     if (dialog.kind === "uploadBatch") {
-      const files = dialog.total === 1 ? "1 file" : `${String(dialog.total)} files`;
-      const taken = dialog.conflicts === 1 ? "1 name already exists" : `${String(dialog.conflicts)} names already exist`;
+      const rows = treeRows(conflictTree(dialog.conflicts));
+      const shown = rows.slice(0, CONFLICT_TREE_MAX_ROWS);
+      const files = countOf(dialog.total, "file");
+      const taken = dialog.conflicts.length === 1 ? "1 name already exists" : `${String(dialog.conflicts.length)} names already exist`;
       return html`
-        <dialog class="dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
+        <dialog class="dialog upload-dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
           <h2>Upload ${files}?</h2>
           <p>${taken} in this folder. Nothing has been written yet.</p>
+          <div class="upload-list" role="tree" aria-label="Files that already exist">
+            ${shown.map(({ node, depth }) => html`
+              <div class="ui-button ui-file-row" style=${`--depth:${String(depth)}`} title=${node.path} role="treeitem" aria-level=${String(depth + 1)}>
+                <span class="ui-file-leading" aria-hidden="true">${node.kind === "directory" ? "▾" : html`<fm-file-icon .url=${resolveIcon(node.path)}></fm-file-icon>`}</span>
+                <span class="ui-file-label" dir="ltr">${node.name}</span>
+              </div>
+            `)}
+            ${rows.length === shown.length ? "" : html`<div class="truncated">and ${countOf(rows.length - shown.length, "more path")}</div>`}
+          </div>
           <footer>
             <button @click=${() => this.#cancelUploads()}>Cancel</button>
-            <button class="primary" @click=${() => this.#runUploads("skip")}>Skip ${dialog.conflicts === 1 ? "it" : "them"}</button>
+            <button class="primary" @click=${() => this.#runUploads("skip")}>Skip ${dialog.conflicts.length === 1 ? "it" : "them"}</button>
             <button @click=${() => this.#runUploads("newer")}>Keep newer</button>
             <button class="danger" @click=${() => this.#runUploads("replace")}>Replace all</button>
           </footer>

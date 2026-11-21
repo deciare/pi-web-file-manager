@@ -60,3 +60,66 @@ export function parentRelative(relative: string): string {
   const parts = relative.split("/").filter((part) => part !== "");
   return parts.slice(0, -1).join("/");
 }
+
+export interface ConflictNode {
+  readonly name: string;
+  readonly path: string;
+  readonly kind: "directory" | "file";
+  readonly children: readonly ConflictNode[];
+}
+
+interface NodeBuilder {
+  readonly name: string;
+  readonly path: string;
+  readonly children: Map<string, NodeBuilder>;
+}
+
+/**
+ * Conflicting paths as a tree, for a reader who wants to see where they are.
+ *
+ * Folders come from the paths themselves rather than from the picked tree: only
+ * the files that collide matter, so a folder appears exactly when it holds one
+ * of them. Sorting puts folders above files at every level, the way a file
+ * listing does.
+ */
+export function conflictTree(relatives: readonly string[]): ConflictNode[] {
+  const root = new Map<string, NodeBuilder>();
+  for (const relative of relatives) {
+    const parts = relative.split("/").filter((part) => part !== "");
+    let level = root;
+    let path = "";
+    for (const [index, part] of parts.entries()) {
+      path = path === "" ? part : `${path}/${part}`;
+      const existing = level.get(part);
+      const node = existing ?? { name: part, path, children: new Map<string, NodeBuilder>() };
+      if (existing === undefined) level.set(part, node);
+      if (index === parts.length - 1) continue;
+      level = node.children;
+    }
+  }
+  return sortNodes(root);
+}
+
+function sortNodes(level: Map<string, NodeBuilder>): ConflictNode[] {
+  return [...level.values()]
+    .map((node) => ({
+      name: node.name,
+      path: node.path,
+      kind: node.children.size > 0 ? "directory" as const : "file" as const,
+      children: sortNodes(node.children),
+    }))
+    .sort((left, right) => {
+      if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
+      return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
+    });
+}
+
+export interface ConflictRow {
+  readonly node: ConflictNode;
+  readonly depth: number;
+}
+
+/** The tree as one flat list with a depth per row: every folder is already open. */
+export function treeRows(nodes: readonly ConflictNode[], depth = 0): ConflictRow[] {
+  return nodes.flatMap((node) => [{ node, depth }, ...treeRows(node.children, depth + 1)]);
+}
