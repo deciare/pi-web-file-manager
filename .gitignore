@@ -1,5 +1,5 @@
 /node_modules/
 /browser/
-/server-plugin.mjs
-/server-plugin.mjs.map
+/server-plugin.js
+/server-plugin.js.map
 *.log
