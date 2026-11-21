@@ -73,7 +73,12 @@ Resources: `download` (one file), `zip` (one directory tree, deflate, no symlink
 
    Built: the editor surface, highlighting for the languages we ship grammars for (JavaScript/TypeScript, JSON, CSS, HTML, Markdown, Python, YAML, and the stream modes for shell, TOML and Dockerfile), wrap and full-height as per-browser preferences in the viewer menu, save with `Ctrl`/`Cmd`+`S` from anywhere in the panel, the changed-on-disk prompt with Reload from disk and Save anyway, and the discard prompt on navigation and page unload. Not built yet: a preview mode for Markdown, and PDF rendering.
 3. **Mutate.** New file, new folder, rename, move (dialog) with a resolution step when the destination name is taken, delete with confirmation and item count, upload files, upload a directory tree, download a directory as zip.
-4. **Polish.** Drag-and-drop move, in-directory filter, "open terminal here" if the Terminal plugin exposes a way to open a shell at an existing directory (otherwise dropped rather than hacked).
+
+   Built: everything except uploading a directory tree, which needs `webkitdirectory` on the browser side and a server change, because the upload channel refuses to create intermediate directories.
+
+4. **Polish.** Drag-and-drop move, in-directory filter, "open terminal here" if the Terminal plugin exposes a way to open a shell at an existing directory (otherwise dropped rather than hacked), and the deep links promised under Panel shape.
+
+   Of these, "open terminal here" is the only one that could need a Pi extension, and only if the Terminal plugin is not an option: PI WEB's host capabilities are content-rendering, file-icons, file-previewing, stylesheet-integration, syntax-highlighting and workspace-files, so no browser plugin can ask the Terminal panel to open a shell. A bridge through the `pi-sessions` capability would open a session, not a terminal at a directory, so it is not the same feature.
 
 Each phase is usable on its own; nothing in an earlier phase depends on a later one landing.
 
