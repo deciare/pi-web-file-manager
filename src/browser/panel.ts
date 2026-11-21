@@ -156,17 +156,15 @@ export class FileManagerPanel extends LitElement {
     .viewer-head strong { flex: 1 1 auto; min-width: 0; padding-inline-start: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
     /* A rule after it, so the close button reads as a control rather than as
        part of the file name that follows. */
-    .viewer-action.close { flex: 0 0 auto; border-inline-end: 1px solid var(--pi-border-muted); }
-    .viewer-actions { align-self: stretch; display: flex; align-items: center; gap: 0; flex: 0 1 auto; min-width: 0; max-width: 100%; }
-    .viewer-actions small { padding-inline: 8px; color: var(--pi-muted); font-size: 12px; }
-    /* 16px text: the menu glyph is the host's, drawn at the size the toolbar
-       above draws it, so the two ... do not look like different buttons. */
-    .viewer-action { box-sizing: border-box; align-self: stretch; display: inline-flex; align-items: center; justify-content: center; width: 32px; min-height: 32px; border: 0; background: transparent; color: var(--pi-muted); font: 16px/20px var(--pi-font, system-ui, sans-serif); padding: 0; text-decoration: none; white-space: nowrap; cursor: pointer; }
-    .viewer-actions > :not(small) + * { border-inline-start: 1px solid var(--pi-border-muted); }
-    .viewer-action:hover { background: var(--pi-surface-hover); color: var(--pi-text); }
-    .viewer-action.icon { color: var(--pi-muted); }
-    .viewer-action.icon:hover { color: var(--pi-text); }
-    .viewer-action.icon[disabled] { opacity: 0.5; cursor: default; }
+    .viewer-head .close { width: 32px; min-width: 32px; border-inline-end: 1px solid var(--pi-border-muted); }
+    /* The file bar's controls are the toolbar's controls: same classes, same
+       32px square, same separator rule, so the two rows cannot drift apart. */
+    .viewer-actions { align-self: stretch; display: flex; align-items: stretch; gap: 0; flex: 0 1 auto; min-width: 0; max-width: 100%; }
+    .viewer-actions small { align-self: center; padding-inline: 8px; color: var(--pi-muted); font: 12px/20px var(--pi-font, system-ui, sans-serif); }
+    .viewer-actions .ui-button--icon { width: 32px; min-width: 32px; }
+    .viewer-actions > .ui-button + .ui-button { border-inline-start: 1px solid var(--pi-border-muted); }
+    .viewer-actions .ui-button:hover:not(:disabled) { background: var(--pi-surface-hover); color: var(--pi-text); }
+    .viewer-actions .ui-button:disabled { opacity: 0.5; cursor: default; }
     .viewer-body { flex: 1; overflow: auto; min-height: 0; }
     pre { margin: 0; padding: 10px; font-family: var(--pi-mono, monospace); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
     img.preview { max-width: 100%; display: block; margin: 10px auto; }
@@ -1379,7 +1377,7 @@ export class FileManagerPanel extends LitElement {
     const head = html`
       <div class="viewer-head">
         <button
-          class="viewer-action icon close"
+          class="ui-button ui-button--compact ui-button--icon close"
           title="Close file"
           aria-label="Close file"
           @click=${() => this.#closePreview()}
@@ -1389,16 +1387,16 @@ export class FileManagerPanel extends LitElement {
           <small>${formatSize(preview.entry.size)}</small>
           ${this.#dirty
             ? html`<button
-                class="viewer-action icon"
+                class="ui-button ui-button--compact ui-button--icon"
                 title=${this.#saving ? "Saving…" : "Save"}
                 aria-label="Save"
                 ?disabled=${this.#saving}
                 @click=${() => void this.#save()}
               >${saveIcon()}</button>`
             : ""}
-          ${downloadUrl === undefined ? "" : html`<a class="viewer-action icon" title="Download" aria-label="Download" href=${downloadUrl} download=${preview.entry.name}>${downloadIcon()}</a>`}
-          <button class="viewer-action icon" title="Reload from disk" aria-label="Reload from disk" @click=${() => void this.#reloadFromDisk()}>${reloadIcon()}</button>
-          <button class="viewer-action" title="File actions" aria-label="File actions" aria-haspopup="menu" @click=${(event: Event) => this.#openViewerMenu(event)}>⋯</button>
+          ${downloadUrl === undefined ? "" : html`<a class="ui-button ui-button--compact ui-button--icon" title="Download" aria-label="Download" href=${downloadUrl} download=${preview.entry.name}>${downloadIcon()}</a>`}
+          <button class="ui-button ui-button--compact ui-button--icon" title="Reload from disk" aria-label="Reload from disk" @click=${() => void this.#reloadFromDisk()}>${reloadIcon()}</button>
+          <button class="ui-button ui-button--compact ui-button--icon" title="File actions" aria-label="File actions" aria-haspopup="menu" @click=${(event: Event) => this.#openViewerMenu(event)}>⋯</button>
         </div>
       </div>`;
     if (preview.error !== undefined) return html`${head}<div class="notice error">${preview.error}</div>`;
