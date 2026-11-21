@@ -165,7 +165,7 @@ export class FileManagerPanel extends LitElement {
     .truncated { padding: 6px 10px; color: var(--pi-dim); }
     .leading { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; color: var(--pi-muted); }
     .menu { position: fixed; z-index: 40; min-width: 190px; padding: 4px; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg-overlay, var(--pi-surface)); box-shadow: 0 10px 30px var(--pi-shadow, rgba(0, 0, 0, 0.4)); }
-    .menu button { display: block; width: 100%; border: 0; border-radius: 5px; background: none; color: var(--pi-text); padding: 7px 9px; text-align: start; font: inherit; cursor: pointer; }
+    .menu button { display: block; width: 100%; border: 0; border-radius: 5px; background: none; color: var(--pi-text); padding: 7px 9px; text-align: start; font: inherit; white-space: nowrap; cursor: pointer; }
     .menu button:hover, .menu button:focus-visible { background: var(--pi-surface-hover, var(--pi-surface)); outline: none; }
     .menu button.danger { color: var(--pi-danger); }
     .menu hr { margin: 4px 2px; border: 0; border-top: 1px solid var(--pi-border-muted); }
