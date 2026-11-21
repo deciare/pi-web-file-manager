@@ -20,8 +20,30 @@ export const PLUGIN_ID = "file-manager";
 export const LIST_MAX_ENTRIES = 20_000;
 /** Largest file offered for editing. Larger files open read-only. */
 export const TEXT_EDIT_MAX_BYTES = 2 * 1024 * 1024;
-/** Raw bytes per channel frame, before base64 expands them to 64 KiB. */
-export const CONTENT_CHUNK_BYTES = 48 * 1024;
+/**
+ * The host bounds one channel data payload at 64 KiB of JSON, and base64 — the
+ * only shape a channel frame can carry bytes in — inflates by four thirds. So
+ * the chunk that fills a frame is smaller than the frame: 48 KiB of bytes
+ * encodes to exactly 64 KiB of base64 and leaves no room for the frame's own
+ * fields, which is how an upload of any size at all failed with "channel data
+ * exceeds the 65536 byte limit". 45 KiB encodes to 60 KiB and leaves 4 KiB for
+ * the envelope.
+ */
+export const CHANNEL_DATA_JSON_MAX_BYTES = 64 * 1024;
+export const CONTENT_CHUNK_BYTES = 45 * 1024;
+
+/**
+ * How far ahead of the server's last acknowledgement the browser may send.
+ *
+ * Progress frames are the only acknowledgement a channel has, so the server's
+ * reporting cadence and this window are one mechanism seen from two ends: a
+ * cadence coarser than the window is a deadlock, because the browser stops
+ * sending at the window and the server only reports when content arrives. It
+ * was 2 MiB against 256 KiB, which is why every upload larger than the window
+ * sat at "0 B" forever. The cadence stays below the window.
+ */
+export const CONTENT_ACK_WINDOW_BYTES = 256 * 1024;
+export const CONTENT_PROGRESS_BYTES = 128 * 1024;
 /** Bytes inspected when deciding whether a file is text. */
 export const BINARY_SNIFF_BYTES = 8192;
 

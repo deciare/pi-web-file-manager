@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { chmod, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { openChannel } from "../src/server/index.ts";
 import { base64, channelHarness, sandbox } from "./support.ts";
+import { CONTENT_ACK_WINDOW_BYTES, CONTENT_CHUNK_BYTES, CONTENT_PROGRESS_BYTES } from "../src/shared/protocol.ts";
 
 function framesOf(frames: unknown[]): Array<Record<string, unknown>> {
   return frames as Array<Record<string, unknown>>;
@@ -164,4 +165,37 @@ test("saves anyway when the caller forces past a changed mtime", async () => {
   } finally {
     await box.cleanup();
   }
+});
+
+/**
+ * The browser stops sending at its window and waits for a progress frame, so a
+ * reporting cadence coarser than the window is a deadlock — the 2 MiB cadence
+ * against a 256 KiB window is what made every upload larger than a window sit
+ * at "0 B" and never finish.
+ */
+test("acknowledges often enough that a windowed sender never waits forever", async () => {
+  const box = await sandbox();
+  try {
+    const harness = channelHarness("upload", { path: box.root, name: "large.bin" });
+    const channel = await openChannel(harness.context);
+    const chunk = base64("x".repeat(CONTENT_CHUNK_BYTES));
+    let sent = 0;
+    while (sent <= CONTENT_ACK_WINDOW_BYTES + CONTENT_CHUNK_BYTES) {
+      await channel.receive({ type: "chunk", data: chunk }, harness.controller.signal);
+      sent += CONTENT_CHUNK_BYTES;
+    }
+    const progresses = framesOf(harness.frames).filter((frame) => frame["type"] === "progress");
+    assert.ok(progresses.length > 0, "no acknowledgement arrived inside one window");
+    const last = progresses.at(-1)?.["received"];
+    assert.equal(typeof last, "number");
+    // What the browser compares against its window: the outstanding bytes.
+    assert.ok(sent - (last as number) <= CONTENT_ACK_WINDOW_BYTES, `outstanding ${String(sent - (last as number))} bytes exceeds the window`);
+    await channel.receive({ type: "end" }, harness.controller.signal);
+  } finally {
+    await box.cleanup();
+  }
+});
+
+test("the reporting cadence stays inside the sender's window", () => {
+  assert.ok(CONTENT_PROGRESS_BYTES < CONTENT_ACK_WINDOW_BYTES);
 });

@@ -1,5 +1,5 @@
 import type { Json, Peer } from "./pluginApi.ts";
-import { CONTENT_CHUNK_BYTES, ERROR_CODES } from "../shared/protocol.ts";
+import { CONTENT_ACK_WINDOW_BYTES, CONTENT_CHUNK_BYTES, ERROR_CODES } from "../shared/protocol.ts";
 import type { ErrorCode, FileEntry, Result } from "../shared/protocol.ts";
 import { isEntry, isRecord } from "../shared/protocol.ts";
 
@@ -105,8 +105,9 @@ function isWriteResult(value: unknown): value is { path: string; size: number; m
  * queues at most 128 frames or 1 MiB per channel, and a tight loop over a large
  * file reaches that in a few hundred chunks.
  */
-const ACK_WINDOW_BYTES = 256 * 1024;
 const TERMINAL_TIMEOUT_MS = 60_000;
+/** A window that never opens is a stalled server, not a slow one. */
+const ACK_TIMEOUT_MS = 30_000;
 
 async function sendContent(
   peer: Peer,
@@ -155,7 +156,11 @@ async function sendContent(
     let sent = 0;
     for await (const chunk of chunks()) {
       if (settled !== undefined) break;
-      while (sent - acknowledged > ACK_WINDOW_BYTES && settled === undefined) {
+      const waitingSince = Date.now();
+      while (sent - acknowledged > CONTENT_ACK_WINDOW_BYTES && settled === undefined) {
+        if (Date.now() - waitingSince > ACK_TIMEOUT_MS) {
+          throw new Error(`The server stopped acknowledging after ${String(acknowledged)} bytes`);
+        }
         await new Promise<void>((resolve) => {
           wake = resolve;
           setTimeout(resolve, 100);

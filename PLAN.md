@@ -47,8 +47,9 @@ Host protocol limits shape the design; these are the numbers the implementation 
 | --- | --- | --- |
 | `request` input | 256 KiB | metadata only, never file content |
 | `request` output | 8 MiB | small listings and stats only |
-| channel frame | 64 KiB | content moves in base64 chunks of 48 KiB |
+| channel data payload | 64 KiB | content moves in base64 chunks of 45 KiB: base64 costs four thirds, so a chunk of the limit would fill the frame on its own and leave nothing for its fields |
 | channel queue | 1 MiB | backpressure must be honoured, not ignored |
+| acknowledgement cadence | below the browser's 256 KiB send window | progress frames *are* the acknowledgement, so a cadence above the window deadlocks a large upload |
 | resource selector | 4 KiB | download and zip identify by path only |
 | resource stream | 30 min | zip streaming is bounded by time, not size |
 

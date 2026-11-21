@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { FileHandle } from "node:fs/promises";
 import type { ChannelOpenContext, Json, PeerChannel } from "./pluginApi.ts";
 import type { ContentRequestFrame } from "../shared/protocol.ts";
-import { CONTENT_CHUNK_BYTES } from "../shared/protocol.ts";
+import { CONTENT_CHUNK_BYTES, CONTENT_PROGRESS_BYTES } from "../shared/protocol.ts";
 import { absolutePath, singleName } from "./paths.ts";
 import { Failure, invalid } from "./failure.ts";
 import { createTempSibling, publishNew, replaceFile } from "./fsOps.ts";
@@ -21,9 +21,12 @@ import { createTempSibling, publishNew, replaceFile } from "./fsOps.ts";
  * user expects a whole one.
  */
 
-/** How often progress is reported. Frequent enough to feel live, rare enough to be cheap. */
+/**
+ * How often progress is reported. Frequent enough to feel live, and frequent
+ * enough to be an acknowledgement: a report at least every `CONTENT_PROGRESS_BYTES`
+ * is what keeps a browser sending, since it stops at its own window.
+ */
 const PROGRESS_INTERVAL_MS = 250;
-const PROGRESS_INTERVAL_BYTES = 2 * 1024 * 1024;
 
 interface Sink {
   write(chunk: Uint8Array): Promise<void>;
@@ -193,7 +196,7 @@ function buildChannel(context: ChannelOpenContext, prepare: () => Promise<Sink>)
 
   function maybeProgress(): void {
     const now = Date.now();
-    if (received - lastProgressBytes < PROGRESS_INTERVAL_BYTES && now - lastProgressAt < PROGRESS_INTERVAL_MS) return;
+    if (received - lastProgressBytes < CONTENT_PROGRESS_BYTES && now - lastProgressAt < PROGRESS_INTERVAL_MS) return;
     lastProgressAt = now;
     lastProgressBytes = received;
     send(context, { type: "progress", received });
