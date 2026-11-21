@@ -152,14 +152,15 @@ export class FileManagerPanel extends LitElement {
     .row-wrap:hover .row-more, .row-more:focus-visible, .row-wrap.menu-open .row-more { opacity: 1; }
     @media (pointer: coarse) { .row-more { opacity: 1; } }
     .viewer { display: flex; flex-direction: column; min-height: 0; }
-    .viewer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding-inline-start: 10px; border-bottom: 1px solid var(--pi-border-muted); }
-    .viewer-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
+    .viewer-head { display: flex; align-items: center; justify-content: space-between; gap: 0; min-height: 32px; border-bottom: 1px solid var(--pi-border-muted); }
+    .viewer-head strong { flex: 1 1 auto; min-width: 0; padding-inline-start: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
+    .viewer-action.close { flex: 0 0 auto; }
     .viewer-actions { align-self: stretch; display: flex; align-items: center; gap: 0; flex: 0 1 auto; min-width: 0; max-width: 100%; }
     .viewer-actions small { padding-inline: 8px; color: var(--pi-muted); font-size: 12px; }
-    .viewer-action { box-sizing: border-box; align-self: stretch; display: inline-flex; align-items: center; min-height: 32px; border: 0; background: transparent; color: var(--pi-muted); font: 12px/20px var(--pi-font, system-ui, sans-serif); padding: 6px 8px; text-decoration: none; white-space: nowrap; cursor: pointer; }
+    .viewer-action { box-sizing: border-box; align-self: stretch; display: inline-flex; align-items: center; justify-content: center; width: 32px; min-height: 32px; border: 0; background: transparent; color: var(--pi-muted); font: 12px/20px var(--pi-font, system-ui, sans-serif); padding: 0; text-decoration: none; white-space: nowrap; cursor: pointer; }
     .viewer-actions > :not(small) + * { border-inline-start: 1px solid var(--pi-border-muted); }
     .viewer-action:hover { background: var(--pi-surface-hover); color: var(--pi-text); }
-    .viewer-action.icon { display: inline-flex; align-items: center; justify-content: center; padding-inline: 8px; color: var(--pi-muted); }
+    .viewer-action.icon { color: var(--pi-muted); }
     .viewer-action.icon:hover { color: var(--pi-text); }
     .viewer-action.icon[disabled] { opacity: 0.5; cursor: default; }
     .viewer-body { flex: 1; overflow: auto; min-height: 0; }
@@ -1303,16 +1304,6 @@ export class FileManagerPanel extends LitElement {
     const entries = this.#visibleEntries();
     return html`
       <div class="ui-toolbar toolbar">
-        ${this.#fullHeight && this.#preview !== undefined
-          ? html`<div class="ui-toolbar-group">
-              <button
-                class="ui-button ui-button--compact ui-button--icon"
-                title="Back to files"
-                aria-label="Back to files"
-                @click=${() => this.#closePreview()}
-              >${backIcon()}</button>
-            </div>`
-          : ""}
         <div class="ui-toolbar-group breadcrumbs" @click=${(event: MouseEvent) => {
           if (this.#editing) return;
           if ((event.target as HTMLElement).closest(".crumb") !== null) return;
@@ -1383,6 +1374,12 @@ export class FileManagerPanel extends LitElement {
     const downloadUrl = this.#client?.downloadUrl(preview.entry.path);
     const head = html`
       <div class="viewer-head">
+        <button
+          class="viewer-action icon close"
+          title="Close file"
+          aria-label="Close file"
+          @click=${() => this.#closePreview()}
+        >${closeIcon()}</button>
         <strong>${this.#dirty ? html`<span class="dirty-dot" title="Unsaved changes">●</span>` : ""}${preview.entry.name}</strong>
         <div class="viewer-actions">
           <small>${formatSize(preview.entry.size)}</small>
@@ -1450,8 +1447,8 @@ function keyFor(context: PanelContext | undefined, snapshot: SelectionSnapshot |
   return machineId === undefined ? undefined : `machine:${machineId}`;
 }
 
-function backIcon() {
-  return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"></path><path d="m11 6-6 6 6 6"></path></svg>`;
+function closeIcon() {
+  return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12"></path><path d="m18 6-12 12"></path></svg>`;
 }
 
 function saveIcon() {
