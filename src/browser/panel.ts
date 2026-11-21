@@ -158,7 +158,10 @@ export class FileManagerPanel extends LitElement {
        part of the file name that follows. */
     .viewer-head .close { width: 32px; min-width: 32px; border-inline-end: 1px solid var(--pi-border-muted); }
     /* The file bar's controls are the toolbar's controls: same classes, same
-       32px square, same separator rule, so the two rows cannot drift apart. */
+       32px square, same separator rule, so the two rows cannot drift apart.
+       Separators belong to the buttons and to nothing else — a wrapper that
+       drew one would put the line where its first child happens to sit, and
+       would take the pixel out of a control that is not the one being marked. */
     .viewer-actions { align-self: stretch; display: flex; align-items: stretch; gap: 0; flex: 0 1 auto; min-width: 0; max-width: 100%; }
     .viewer-actions small { align-self: center; padding-inline: 8px; color: var(--pi-muted); font: 12px/20px var(--pi-font, system-ui, sans-serif); }
     .viewer-actions .ui-button--icon { width: 32px; min-width: 32px; }
