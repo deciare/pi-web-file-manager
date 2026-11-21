@@ -22,6 +22,12 @@ Then list it as a Pi package so PI WEB can discover it. **Settings → Pi packag
 "../pi-web/packages/file-manager"
 ```
 
+The `pi` field in `package.json` declares an empty `extensions` list on purpose: a
+package that declares no Pi resources at all is registered by the agent as a
+single extension pointing at the directory, which cannot be imported and fails
+with `Cannot find module`. This package's value is its PI WEB plugin, not a Pi
+extension.
+
 Restart the session daemon and reload the page. A server-backed plugin is loaded by the daemon at start, so a browser reload alone will not pick it up; restarting interrupts live sessions and terminals, so choose a quiet moment. The panel appears as a **File manager** tab.
 
 ## Boundary

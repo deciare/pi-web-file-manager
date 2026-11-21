@@ -75,7 +75,7 @@ try {
 } catch (error) {
   fail(`build failed, nothing installed: ${error instanceof Error ? error.message : String(error)}`);
 }
-for (const required of [join(root, "server-plugin.js"), join(root, "browser", manifest.piWeb.plugins[0].module.split("/").at(-1))]) {
+for (const required of [join(root, "server-plugin.mjs"), join(root, "browser", manifest.piWeb.plugins[0].module.split("/").at(-1))]) {
   if (!(await isFile(required))) fail(`build produced no ${basename(required)}; nothing installed`);
 }
 
@@ -91,7 +91,7 @@ const probe = [
   "console.log('ok');",
 ].join("\n");
 try {
-  await run(process.execPath, ["--input-type=module", "-e", probe, pathToFileURL(join(root, "server-plugin.js")).href]);
+  await run(process.execPath, ["--input-type=module", "-e", probe, pathToFileURL(join(root, "server-plugin.mjs")).href]);
 } catch (error) {
   fail(`the server bundle does not import as an ES module, nothing installed: ${String(error.stderr ?? error.message).trim()}`);
 }

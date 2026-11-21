@@ -4,13 +4,16 @@
   "private": true,
   "type": "module",
   "description": "General filesystem browser, editor, and file manager for PI WEB",
+  "pi": {
+    "extensions": []
+  },
   "piWeb": {
     "plugins": [
       {
         "id": "file-manager",
         "browserRoot": "browser",
         "module": "browser/pi-web-plugin.js",
-        "serverModule": "server-plugin.js",
+        "serverModule": "server-plugin.mjs",
         "machineSpecific": true
       }
     ]

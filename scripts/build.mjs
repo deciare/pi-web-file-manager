@@ -4,7 +4,11 @@ import { rm } from "node:fs/promises";
 const watch = process.argv.includes("--watch");
 
 await rm("browser", { recursive: true, force: true });
+await rm("server-plugin.mjs", { force: true });
+// The server half used to be emitted as .js, which pi's extension loader then
+// picked up as if it were a Pi extension — the package is a PI WEB plugin.
 await rm("server-plugin.js", { force: true });
+await rm("server-plugin.js.map", { force: true });
 
 /**
  * Both halves are bundled so the installed package has no bare specifiers to
@@ -34,7 +38,7 @@ await Promise.all([
   build({
     ...common,
     entryPoints: ["src/server/index.ts"],
-    outfile: "server-plugin.js",
+    outfile: "server-plugin.mjs",
     platform: "node",
     // esbuild renders a CommonJS dependency's `require()` calls through its own
     // shim, which throws "Dynamic require of … is not supported" when the
