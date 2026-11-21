@@ -70,6 +70,8 @@ Resources: `download` (one file), `zip` (one directory tree, deflate, no symlink
 
 1. **Read.** Browse, breadcrumbs, go-to-path, paged listing, directory refresh, per-row and folder menus, text viewer, image/PDF/Markdown preview, download file, copy absolute path, copy workspace-relative path, hidden-files toggle, deep links, per-browser persistence.
 2. **Edit.** CodeMirror with syntax highlighting and wrap toggle, save with conflict detection, reload-from-disk for a file that changed underneath the editor, dirty guard on navigation and unload, full-height toggle.
+
+   Built: the editor surface, highlighting for the languages we ship grammars for (JavaScript/TypeScript, JSON, CSS, HTML, Markdown, Python, YAML, and the stream modes for shell, TOML and Dockerfile), wrap and full-height as per-browser preferences in the viewer menu, save with `Ctrl`/`Cmd`+`S` from anywhere in the panel, the changed-on-disk prompt with Reload from disk and Save anyway, and the discard prompt on navigation and page unload. Not built yet: a preview mode for Markdown, and PDF rendering.
 3. **Mutate.** New file, new folder, rename, move (dialog) with a resolution step when the destination name is taken, delete with confirmation and item count, upload files, upload a directory tree, download a directory as zip.
 4. **Polish.** Drag-and-drop move, in-directory filter, "open terminal here" if the Terminal plugin exposes a way to open a shell at an existing directory (otherwise dropped rather than hacked).
 

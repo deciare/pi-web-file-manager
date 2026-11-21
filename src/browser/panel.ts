@@ -4,6 +4,7 @@ import type { PanelContext, SelectionService, SelectionSnapshot } from "./plugin
 import { clientFor, fromBase64, type FileManagerClient } from "./client.ts";
 import { hostCapabilities } from "./capabilities.ts";
 import { defineFileTypeIcon, folderIcon, resolveIcon } from "./fileIcon.ts";
+import { FileEditor, defineFileEditor } from "./editor.ts";
 import {
   baseName, breadcrumbSegments, formatSize, isHiddenName, joinPath, parentPath, relativeToRoot, resolveAddress,
 } from "./breadcrumbs.ts";
@@ -29,6 +30,7 @@ const RECONCILE_DELAY_MS = 120;
 
 export function defineFileManagerPanel(): void {
   defineFileTypeIcon();
+  defineFileEditor();
   if (customElements.get(PANEL_TAG) === undefined) customElements.define(PANEL_TAG, FileManagerPanel);
 }
 
@@ -36,10 +38,14 @@ export function defineFileManagerPanel(): void {
 const rememberedDirectories = new Map<string, string>();
 
 const HIDDEN_PREFERENCE_KEY = "pi-web.file-manager.show-hidden";
+const WRAP_PREFERENCE_KEY = "pi-web.file-manager.wrap";
+const FULL_HEIGHT_KEY = "pi-web.file-manager.full-height";
 
 interface Preview {
   readonly entry: FileEntry;
   readonly text?: string;
+  /** The file's modification time when it was read, for save conflicts. */
+  readonly mtimeMs?: number;
   readonly previewUrl?: string;
   readonly readOnlyReason?: "size" | "binary" | "directory";
   readonly error?: string;
@@ -84,6 +90,14 @@ type DialogState =
   | { readonly kind: "delete"; readonly entry: FileEntry; readonly plan: DeletePlan; readonly error?: string }
   | { readonly kind: "replace"; readonly file: File; readonly error?: string }
   | {
+    readonly kind: "save";
+    readonly entry: FileEntry;
+    readonly message: string;
+    /** The file changed underneath; offer to overwrite it anyway. */
+    readonly conflicted: boolean;
+  }
+  | { readonly kind: "discard"; readonly entry?: FileEntry }
+  | {
     readonly kind: "move";
     readonly entry: FileEntry;
     /** The folder being browsed as the destination. */
@@ -101,6 +115,8 @@ interface MenuState {
   readonly y: number;
   /** Undefined for the toolbar menu, set for a row menu. */
   readonly entry?: FileEntry;
+  /** The viewer's own menu, which acts on the open file. */
+  readonly viewer?: boolean;
 }
 
 export class FileManagerPanel extends LitElement {
@@ -117,6 +133,11 @@ export class FileManagerPanel extends LitElement {
     .address.ui-input { flex: 1 1 auto; align-self: stretch; width: auto; min-width: 0; min-height: 0; height: auto; border: 0; border-radius: 0; background: var(--pi-bg); color: var(--pi-text); padding: 0 10px; font: 13px/1.4 var(--pi-mono, ui-monospace, monospace); direction: ltr; }
     .address.ui-input:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
     main { flex: 1; display: grid; grid-template-rows: minmax(160px, 34%) minmax(0, 1fr); min-height: 0; }
+    main.full { grid-template-rows: minmax(0, 1fr); }
+    main.full .list { display: none; }
+    .viewer-body.editing { overflow: hidden; display: flex; min-height: 0; }
+    fm-editor { flex: 1 1 auto; min-width: 0; min-height: 0; }
+    .viewer-head .dirty-dot { color: var(--pi-warning); padding-inline-end: 6px; }
     .list { overflow: auto; min-height: 0; border-bottom: 1px solid var(--pi-border); }
     .row-wrap { position: relative; }
     .row-wrap .ui-button.ui-file-row { width: 100%; padding-inline-end: 34px; }
@@ -193,6 +214,14 @@ export class FileManagerPanel extends LitElement {
   #menu: MenuState | undefined;
   #dialog: DialogState | undefined;
   #showHidden = readHiddenPreference();
+  #wrap = readToggle(WRAP_PREFERENCE_KEY, true);
+  #fullHeight = readToggle(FULL_HEIGHT_KEY, false);
+  #dirty = false;
+  #saving = false;
+  /** The text as it was when read or last saved: the baseline for "changed". */
+  #savedText: string | undefined;
+  /** What to do once the user agrees to lose their edits. */
+  #pendingNavigation: (() => void) | undefined;
   #uploading: { readonly name: string; readonly received: number; readonly total: number } | undefined;
 
   constructor() {
@@ -225,11 +254,18 @@ export class FileManagerPanel extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    window.addEventListener("beforeunload", this.#onBeforeUnload);
+    // Save works wherever the focus is in the panel. CodeMirror's own binding
+    // only covers the editor, and the user's attention is on the Save button
+    // exactly when it matters least.
+    document.addEventListener("keydown", this.#onDocumentKeyDown, true);
     document.addEventListener("pointerdown", this.#onDocumentPointerDown, true);
     this.#scheduleStart();
   }
 
   override disconnectedCallback(): void {
+    window.removeEventListener("beforeunload", this.#onBeforeUnload);
+    document.removeEventListener("keydown", this.#onDocumentKeyDown, true);
     document.removeEventListener("pointerdown", this.#onDocumentPointerDown, true);
     if (this.#pendingReconcile !== undefined) { clearTimeout(this.#pendingReconcile); this.#pendingReconcile = undefined; }
     this.#unsubscribe?.();
@@ -372,7 +408,11 @@ export class FileManagerPanel extends LitElement {
     await this.#openDirectory(target, false);
   }
 
-  async #openDirectory(path: string, remember = true): Promise<void> {
+  async #openDirectory(path: string, remember = true, confirm = true): Promise<void> {
+    if (confirm && this.#dirty) {
+      this.#askDiscard(() => void this.#openDirectory(path, remember, false));
+      return;
+    }
     const client = this.#client;
     if (client === undefined) return;
     this.#controller?.abort();
@@ -381,6 +421,8 @@ export class FileManagerPanel extends LitElement {
     this.#loading = true;
     this.#error = undefined;
     this.#preview = undefined;
+    this.#savedText = undefined;
+    this.#dirty = false;
     this.requestUpdate();
 
     const result = await client.list(path, controller.signal);
@@ -407,11 +449,15 @@ export class FileManagerPanel extends LitElement {
     if (this.#directory !== undefined) await this.#openDirectory(this.#directory);
   }
 
-  async #openEntry(entry: FileEntry): Promise<void> {
+  async #openEntry(entry: FileEntry, confirm = true): Promise<void> {
     const client = this.#client;
     if (client === undefined) return;
+    if (confirm && this.#dirty) {
+      this.#askDiscard(() => void this.#openEntry(entry, false));
+      return;
+    }
     if (entry.kind === "directory" || entry.linkKind === "directory") {
-      await this.#openDirectory(entry.path);
+      await this.#openDirectory(entry.path, true, false);
       return;
     }
     this.#preview = { entry };
@@ -434,9 +480,15 @@ export class FileManagerPanel extends LitElement {
       return;
     }
     const read = await client.readText(entry.path);
-    this.#preview = read.ok === false
-      ? { entry, error: read.error.message }
-      : { entry, text: new TextDecoder().decode(fromBase64(read.data.data)) };
+    if (read.ok === false) {
+      this.#preview = { entry, error: read.error.message };
+      this.requestUpdate();
+      return;
+    }
+    const text = new TextDecoder().decode(fromBase64(read.data.data));
+    this.#preview = { entry, text, mtimeMs: read.data.mtimeMs };
+    this.#savedText = text;
+    this.#dirty = false;
     this.requestUpdate();
   }
 
@@ -449,6 +501,27 @@ export class FileManagerPanel extends LitElement {
     const y = Math.min(anchor.bottom + 4, Math.max(8, window.innerHeight - 240));
     this.#menu = entry === undefined ? { x, y } : { x, y, entry };
     this.requestUpdate();
+  }
+
+  #openViewerMenu(event: Event): void {
+    event.stopPropagation();
+    const anchor = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = Math.max(8, Math.min(anchor.left, window.innerWidth - 210));
+    const y = Math.min(anchor.bottom + 4, Math.max(8, window.innerHeight - 240));
+    this.#menu = { x, y, viewer: true };
+    this.requestUpdate();
+  }
+
+  #toggleWrap(): void {
+    this.#wrap = !this.#wrap;
+    writeToggle(WRAP_PREFERENCE_KEY, this.#wrap);
+    this.#closeMenu();
+  }
+
+  #toggleFullHeight(): void {
+    this.#fullHeight = !this.#fullHeight;
+    writeToggle(FULL_HEIGHT_KEY, this.#fullHeight);
+    this.#closeMenu();
   }
 
   #closeMenu(): void {
@@ -584,6 +657,106 @@ export class FileManagerPanel extends LitElement {
     anchor.href = url;
     anchor.download = `${baseName(directory) || "root"}.zip`;
     anchor.click();
+  }
+
+  // ---- editing -----------------------------------------------------------
+
+  /** A reload with unsaved edits asks first, in the browser's own words. */
+  #onBeforeUnload = (event: BeforeUnloadEvent): void => {
+    if (!this.#dirty) return;
+    event.preventDefault();
+    event.returnValue = "";
+  };
+
+  #onDocumentKeyDown = (event: KeyboardEvent): void => {
+    if (event.key !== "s" && event.key !== "S") return;
+    if (event.metaKey !== true && event.ctrlKey !== true) return;
+    if (!event.composedPath().includes(this)) return;
+    event.preventDefault();
+    void this.#save();
+  };
+
+  #editor(): FileEditor | undefined {
+    return this.renderRoot.querySelector<FileEditor>("fm-editor") ?? undefined;
+  }
+
+  #onEditorChange(): void {
+    const editor = this.#editor();
+    if (editor === undefined || this.#savedText === undefined) return;
+    const dirty = editor.documentText !== this.#savedText;
+    if (dirty === this.#dirty) return;
+    this.#dirty = dirty;
+    this.requestUpdate();
+  }
+
+  async #save(force = false): Promise<void> {
+    const client = this.#client;
+    const preview = this.#preview;
+    const editor = this.#editor();
+    if (client === undefined || preview === undefined || editor === undefined || this.#saving) return;
+    const text = editor.documentText;
+    this.#saving = true;
+    this.requestUpdate();
+    const result = await client.save(preview.entry.path, preview.mtimeMs ?? null, text, new AbortController().signal, force);
+    this.#saving = false;
+    if (result.ok === false) {
+      this.#dialog = result.error.code === "ECONFLICT"
+        ? { kind: "save", entry: preview.entry, message: "Someone else saved it after you opened it. Reloading shows their version; saving anyway replaces it with yours.", conflicted: true }
+        : { kind: "save", entry: preview.entry, message: result.error.message, conflicted: false };
+      this.requestUpdate();
+      return;
+    }
+    this.#savedText = text;
+    this.#dirty = false;
+    this.#dialog = undefined;
+    const entry = { ...preview.entry, size: result.data.size, mtimeMs: result.data.mtimeMs };
+    this.#preview = { ...preview, entry, mtimeMs: result.data.mtimeMs };
+    this.#entries = this.#entries.map((item) => (item.path === entry.path ? entry : item));
+    this.#setStatus(`Saved ${entry.name}`);
+    this.requestUpdate();
+    this.#restoreFocus();
+    // "Save" in the discard dialog means "save, then do what I asked for".
+    const next = this.#pendingNavigation;
+    this.#pendingNavigation = undefined;
+    next?.();
+  }
+
+  async #reloadFromDisk(): Promise<void> {
+    const client = this.#client;
+    const preview = this.#preview;
+    if (client === undefined || preview === undefined) return;
+    const read = await client.readText(preview.entry.path);
+    if (read.ok === false) {
+      this.#dialog = { kind: "save", entry: preview.entry, message: read.error.message, conflicted: false };
+      this.requestUpdate();
+      return;
+    }
+    const text = new TextDecoder().decode(fromBase64(read.data.data));
+    const entry = { ...preview.entry, size: read.data.size, mtimeMs: read.data.mtimeMs };
+    this.#preview = { ...preview, entry, text, mtimeMs: read.data.mtimeMs };
+    this.#entries = this.#entries.map((item) => (item.path === entry.path ? entry : item));
+    this.#savedText = text;
+    this.#dirty = false;
+    this.#dialog = undefined;
+    this.requestUpdate();
+    this.#restoreFocus();
+  }
+
+  /** Ask before losing edits; `next` runs if the user agrees. */
+  #askDiscard(next: () => void): void {
+    this.#pendingNavigation = next;
+    this.#dialog = { kind: "discard", ...(this.#preview === undefined ? {} : { entry: this.#preview.entry }) };
+    this.requestUpdate();
+  }
+
+  #discardChanges(): void {
+    const next = this.#pendingNavigation;
+    this.#pendingNavigation = undefined;
+    this.#dialog = undefined;
+    this.#dirty = false;
+    this.#savedText = undefined;
+    this.requestUpdate();
+    next?.();
   }
 
   #askMove(entry: FileEntry): void {
@@ -870,7 +1043,14 @@ export class FileManagerPanel extends LitElement {
       <div class="menu" role="menu" style=${`left:${String(menu.x)}px; top:${String(menu.y)}px`} @keydown=${(event: KeyboardEvent) => {
         if (event.key === "Escape") { this.#closeMenu(); }
       }}>
-        ${entry === undefined
+        ${menu.viewer === true
+          ? html`
+            ${this.#menuItem("Reload from disk", () => { this.#closeMenu(); void this.#reloadFromDisk(); })}
+            <hr>
+            ${this.#menuItem(this.#wrap ? "Wrap lines ✓" : "Wrap lines", () => this.#toggleWrap())}
+            ${this.#menuItem(this.#fullHeight ? "Full height ✓" : "Full height", () => this.#toggleFullHeight())}
+          `
+          : entry === undefined
           ? html`
             ${this.#menuItem("New folder…", () => this.#askNewFolder())}
             ${this.#menuItem("New file…", () => this.#askNewFile())}
@@ -924,21 +1104,52 @@ export class FileManagerPanel extends LitElement {
         </dialog>
       `;
     }
-    const title = dialog.kind === "newFolder" ? "New folder" : dialog.kind === "newFile" ? "New file" : `Rename ${dialog.entry.name}`;
-    const action = dialog.kind === "rename" ? "Rename" : "Create";
-    const replacing = dialog.kind === "rename" && dialog.canReplace === true;
+    if (dialog.kind === "save") {
+      return html`
+        <dialog class="dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
+          <h2>${dialog.conflicted ? "This file changed on disk" : `Could not save ${dialog.entry.name}`}</h2>
+          <p>${dialog.message}</p>
+          <footer>
+            ${dialog.conflicted
+              ? html`
+                <button @click=${() => this.#cancelDialog()}>Cancel</button>
+                <button @click=${() => void this.#reloadFromDisk()}>Reload from disk</button>
+                <button class="primary" @click=${() => void this.#save(true)}>Save anyway</button>
+              `
+              : html`<button class="primary" @click=${() => this.#cancelDialog()}>Close</button>`}
+          </footer>
+        </dialog>
+      `;
+    }
+    if (dialog.kind === "discard") {
+      return html`
+        <dialog class="dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
+          <h2>Discard changes?</h2>
+          <p>${dialog.entry === undefined ? "This file" : dialog.entry.name} has edits that are not saved.</p>
+          <footer>
+            <button @click=${() => this.#cancelDialog()}>Cancel</button>
+            <button @click=${() => void this.#save()}>Save</button>
+            <button class="danger" @click=${() => this.#discardChanges()}>Discard</button>
+          </footer>
+        </dialog>
+      `;
+    }
+    const named = dialog;
+    const title = named.kind === "newFolder" ? "New folder" : named.kind === "newFile" ? "New file" : `Rename ${named.entry.name}`;
+    const action = named.kind === "rename" ? "Rename" : "Create";
+    const replacing = named.kind === "rename" && named.canReplace === true;
     return html`
       <dialog class="dialog" @cancel=${(event: Event) => { event.preventDefault(); this.#cancelDialog(); }} @close=${() => this.#cancelDialog()}>
         <h2>${title}</h2>
         <input
           aria-label="Name"
-          .value=${dialog.draft}
+          .value=${named.draft}
           @input=${(event: Event) => {
             const draft = (event.target as HTMLInputElement).value;
-            const cleared = dialog.kind === "rename" && dialog.blockedName !== undefined && draft.trim() !== dialog.blockedName;
+            const cleared = named.kind === "rename" && named.blockedName !== undefined && draft.trim() !== named.blockedName;
             this.#dialog = cleared
-              ? { ...dialog, draft, error: undefined, blockedName: undefined, canReplace: false, conflictKind: undefined }
-              : { ...dialog, draft };
+              ? { ...named, draft, error: undefined, blockedName: undefined, canReplace: false, conflictKind: undefined }
+              : { ...named, draft };
             this.requestUpdate();
           }}
           @keydown=${(event: KeyboardEvent) => {
@@ -946,14 +1157,14 @@ export class FileManagerPanel extends LitElement {
           }}
           @focus=${(event: Event) => (event.target as HTMLInputElement).select()}
         >
-        ${dialog.error === undefined ? "" : html`<p class="dialog-error">${dialog.error}</p>`}
+        ${named.error === undefined ? "" : html`<p class="dialog-error">${named.error}</p>`}
         <footer>
           <button @click=${() => this.#cancelDialog()}>Cancel</button>
           ${replacing
-            ? html`<button class="danger" @click=${() => void this.#submitName(true)}>Replace ${dialog.conflictKind ?? "item"}</button>`
+            ? html`<button class="danger" @click=${() => void this.#submitName(true)}>Replace ${named.conflictKind ?? "item"}</button>`
             : html`<button
                 class="primary"
-                ?disabled=${dialog.kind === "rename" && dialog.blockedName !== undefined && dialog.draft.trim() === dialog.blockedName}
+                ?disabled=${named.kind === "rename" && named.blockedName !== undefined && named.draft.trim() === named.blockedName}
                 @click=${() => void this.#submitName()}
               >${action}</button>`}
         </footer>
@@ -1019,7 +1230,22 @@ export class FileManagerPanel extends LitElement {
   #cancelDialog(): void {
     if (this.#dialog === undefined) return;
     this.#dialog = undefined;
+    this.#pendingNavigation = undefined;
     this.requestUpdate();
+    this.#restoreFocus();
+  }
+
+  /**
+   * A closed dialog takes the focus with it, which leaves the panel deaf to
+   * keys: Ctrl+S after dismissing a dialog did nothing until the editor was
+   * clicked again.
+   */
+  #restoreFocus(): void {
+    void this.updateComplete.then(() => {
+      const editor = this.#editor();
+      if (editor !== undefined) editor.focusEditor();
+      else this.focus();
+    });
   }
 
   override render() {
@@ -1065,7 +1291,7 @@ export class FileManagerPanel extends LitElement {
         }}
       >
       ${this.#error === undefined ? "" : html`<div class="notice error">${this.#error}</div>`}
-      <main>
+      <main class=${this.#fullHeight && this.#preview !== undefined ? "full" : ""}>
         <div class="list ui-file-list" role="listbox" aria-label="Directory listing">
           ${atRoot ? "" : html`
             <button type="button" class="ui-button ui-file-row" title="Parent directory" @click=${() => void this.#openDirectory(this.#parent ?? "/")}>
@@ -1097,16 +1323,29 @@ export class FileManagerPanel extends LitElement {
     const downloadUrl = this.#client?.downloadUrl(preview.entry.path);
     const head = html`
       <div class="viewer-head">
-        <strong>${preview.entry.name}</strong>
+        <strong>${this.#dirty ? html`<span class="dirty-dot" title="Unsaved changes">●</span>` : ""}${preview.entry.name}</strong>
         <div class="viewer-actions">
+          ${this.#dirty ? html`<button class="viewer-action dirty-save" ?disabled=${this.#saving} @click=${() => void this.#save()}>${this.#saving ? "Saving…" : "Save"}</button>` : ""}
           <small>${formatSize(preview.entry.size)}</small>
           ${downloadUrl === undefined ? "" : html`<a class="viewer-action" href=${downloadUrl} download=${preview.entry.name}>Download</a>`}
           <button class="viewer-action" @click=${() => this.#copyText(preview.entry.path)}>Copy path</button>
           ${this.#relativePath(preview.entry.path) === undefined ? "" : html`<button class="viewer-action" @click=${() => this.#copyText(this.#relativePath(preview.entry.path) ?? "")}>Copy relative path</button>`}
+          <button class="viewer-action" aria-label="File actions" aria-haspopup="menu" @click=${(event: Event) => this.#openViewerMenu(event)}>⋯</button>
         </div>
       </div>`;
     if (preview.error !== undefined) return html`${head}<div class="notice error">${preview.error}</div>`;
-    if (preview.text !== undefined) return html`${head}<div class="viewer-body"><pre>${preview.text}</pre></div>`;
+    if (preview.text !== undefined) {
+      return html`${head}
+        <div class="viewer-body editing">
+          <fm-editor
+            .path=${preview.entry.path}
+            .text=${preview.text}
+            .wrap=${this.#wrap}
+            @fm-change=${() => this.#onEditorChange()}
+            @fm-save=${() => void this.#save()}
+          ></fm-editor>
+        </div>`;
+    }
     if (preview.previewUrl !== undefined && isImage(preview.entry.name)) {
       return html`${head}<div class="viewer-body"><img class="preview" src=${preview.previewUrl} alt=${preview.entry.name}></div>`;
     }
@@ -1160,8 +1399,21 @@ function readHiddenPreference(): boolean {
 }
 
 function writeHiddenPreference(value: boolean): void {
+  writeToggle(HIDDEN_PREFERENCE_KEY, value);
+}
+
+function readToggle(key: string, fallback: boolean): boolean {
   try {
-    window.localStorage.setItem(HIDDEN_PREFERENCE_KEY, value ? "1" : "0");
+    const stored = window.localStorage.getItem(key);
+    return stored === null ? fallback : stored === "1";
+  } catch {
+    return fallback;
+  }
+}
+
+function writeToggle(key: string, value: boolean): void {
+  try {
+    window.localStorage.setItem(key, value ? "1" : "0");
   } catch {
     // A browser that refuses storage keeps the toggle for this page only.
   }
