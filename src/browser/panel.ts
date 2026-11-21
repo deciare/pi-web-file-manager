@@ -74,8 +74,8 @@ function isReplaceable(source: ConflictKind, destination: ConflictKind): boolean
 }
 
 type DialogState =
-  | { readonly kind: "newFolder"; readonly draft: string; readonly error?: string }
-  | { readonly kind: "newFile"; readonly draft: string; readonly error?: string }
+  | { readonly kind: "newFolder"; readonly draft: string; readonly error?: string | undefined; readonly blockedName?: string | undefined }
+  | { readonly kind: "newFile"; readonly draft: string; readonly error?: string | undefined; readonly blockedName?: string | undefined }
   | {
     readonly kind: "rename";
     readonly entry: FileEntry;
@@ -867,12 +867,20 @@ export class FileManagerPanel extends LitElement {
       return;
     }
 
+    if (dialog.blockedName !== undefined && name === dialog.blockedName) return;
     const target = joinPath(directory, name);
     // A new file is an empty save; a save refuses an existing name, which is
     // exactly the conflict we want to report here.
     const result = dialog.kind === "newFolder" ? await client.mkdir(target) : await client.save(target, null, "", new AbortController().signal);
     if (result.ok === false) {
-      this.#dialog = { ...dialog, error: result.error.message };
+      // Same sentence a rename uses, so one rule covers every "that name is
+      // taken" in the panel instead of one per operation.
+      if (result.error.code === "EEXIST" || result.error.code === "ECONFLICT") {
+        const conflictKind = await this.#conflictKind(client, target);
+        this.#dialog = { ...dialog, error: `A ${conflictKind} with that name already exists.`, blockedName: name };
+      } else {
+        this.#dialog = { ...dialog, error: result.error.message };
+      }
       this.requestUpdate();
       return;
     }
@@ -1146,9 +1154,15 @@ export class FileManagerPanel extends LitElement {
           .value=${named.draft}
           @input=${(event: Event) => {
             const draft = (event.target as HTMLInputElement).value;
-            const cleared = named.kind === "rename" && named.blockedName !== undefined && draft.trim() !== named.blockedName;
+            const cleared = named.blockedName !== undefined && draft.trim() !== named.blockedName;
             this.#dialog = cleared
-              ? { ...named, draft, error: undefined, blockedName: undefined, canReplace: false, conflictKind: undefined }
+              ? {
+                ...named,
+                draft,
+                error: undefined,
+                blockedName: undefined,
+                ...(named.kind === "rename" ? { canReplace: false, conflictKind: undefined } : {}),
+              }
               : { ...named, draft };
             this.requestUpdate();
           }}
@@ -1164,7 +1178,7 @@ export class FileManagerPanel extends LitElement {
             ? html`<button class="danger" @click=${() => void this.#submitName(true)}>Replace ${named.conflictKind ?? "item"}</button>`
             : html`<button
                 class="primary"
-                ?disabled=${named.kind === "rename" && named.blockedName !== undefined && named.draft.trim() === named.blockedName}
+                ?disabled=${named.blockedName !== undefined && named.draft.trim() === named.blockedName}
                 @click=${() => void this.#submitName()}
               >${action}</button>`}
         </footer>

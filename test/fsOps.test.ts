@@ -337,3 +337,14 @@ test("refuses to replace across kinds, which the kernel would refuse anyway", as
     (error: unknown) => error instanceof Failure && error.code === "EEXIST" && /not interchangeable/u.test(error.message),
   );
 });
+
+test("names what is already at the name a new folder was given", async () => {
+  const box = await sandbox();
+  await writeFile(box.path("taken.txt"), "x");
+  await mkdir(box.path("taken-dir"));
+
+  const ontoFile = makeDirectory({ path: box.path("taken.txt") });
+  await assert.rejects(ontoFile, (error: unknown) => error instanceof Failure && error.code === "EEXIST" && error.message === "A file with that name already exists");
+  const ontoFolder = makeDirectory({ path: box.path("taken-dir") });
+  await assert.rejects(ontoFolder, (error: unknown) => error instanceof Failure && error.code === "EEXIST" && error.message === "A folder with that name already exists");
+});

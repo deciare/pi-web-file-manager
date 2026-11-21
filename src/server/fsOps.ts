@@ -157,6 +157,12 @@ export async function readTextFile(input: { path?: unknown }): Promise<ReadTextR
 
 export async function makeDirectory(input: { path?: unknown }): Promise<MkdirResponse> {
   const path = absolutePath(input.path);
+  // The errno message for this names the absolute path and the syscall, which
+  // is noise in a dialog asking the reader to choose another name.
+  const existing = await lstat(path).catch((error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? undefined : Promise.reject(error)));
+  if (existing !== undefined) {
+    throw new Failure("EEXIST", `A ${existing.isDirectory() ? "folder" : "file"} with that name already exists`, path);
+  }
   await mkdir(path);
   return { path };
 }
