@@ -154,10 +154,14 @@ export class FileManagerPanel extends LitElement {
     .viewer { display: flex; flex-direction: column; min-height: 0; }
     .viewer-head { display: flex; align-items: center; justify-content: space-between; gap: 0; min-height: 32px; border-bottom: 1px solid var(--pi-border-muted); }
     .viewer-head strong { flex: 1 1 auto; min-width: 0; padding-inline-start: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
-    .viewer-action.close { flex: 0 0 auto; }
+    /* A rule after it, so the close button reads as a control rather than as
+       part of the file name that follows. */
+    .viewer-action.close { flex: 0 0 auto; border-inline-end: 1px solid var(--pi-border-muted); }
     .viewer-actions { align-self: stretch; display: flex; align-items: center; gap: 0; flex: 0 1 auto; min-width: 0; max-width: 100%; }
     .viewer-actions small { padding-inline: 8px; color: var(--pi-muted); font-size: 12px; }
-    .viewer-action { box-sizing: border-box; align-self: stretch; display: inline-flex; align-items: center; justify-content: center; width: 32px; min-height: 32px; border: 0; background: transparent; color: var(--pi-muted); font: 12px/20px var(--pi-font, system-ui, sans-serif); padding: 0; text-decoration: none; white-space: nowrap; cursor: pointer; }
+    /* 16px text: the menu glyph is the host's, drawn at the size the toolbar
+       above draws it, so the two ... do not look like different buttons. */
+    .viewer-action { box-sizing: border-box; align-self: stretch; display: inline-flex; align-items: center; justify-content: center; width: 32px; min-height: 32px; border: 0; background: transparent; color: var(--pi-muted); font: 16px/20px var(--pi-font, system-ui, sans-serif); padding: 0; text-decoration: none; white-space: nowrap; cursor: pointer; }
     .viewer-actions > :not(small) + * { border-inline-start: 1px solid var(--pi-border-muted); }
     .viewer-action:hover { background: var(--pi-surface-hover); color: var(--pi-text); }
     .viewer-action.icon { color: var(--pi-muted); }
