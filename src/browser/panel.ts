@@ -157,6 +157,7 @@ export class FileManagerPanel extends LitElement {
     .viewer-action:hover { background: var(--pi-surface-hover); color: var(--pi-text); }
     .viewer-action.icon { display: inline-flex; align-items: center; justify-content: center; padding-inline: 8px; color: var(--pi-muted); }
     .viewer-action.icon:hover { color: var(--pi-text); }
+    .viewer-action.icon[disabled] { opacity: 0.5; cursor: default; }
     .viewer-body { flex: 1; overflow: auto; min-height: 0; }
     pre { margin: 0; padding: 10px; font-family: var(--pi-mono, monospace); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
     img.preview { max-width: 100%; display: block; margin: 10px auto; }
@@ -1347,8 +1348,16 @@ export class FileManagerPanel extends LitElement {
       <div class="viewer-head">
         <strong>${this.#dirty ? html`<span class="dirty-dot" title="Unsaved changes">●</span>` : ""}${preview.entry.name}</strong>
         <div class="viewer-actions">
-          ${this.#dirty ? html`<button class="viewer-action dirty-save" ?disabled=${this.#saving} @click=${() => void this.#save()}>${this.#saving ? "Saving…" : "Save"}</button>` : ""}
           <small>${formatSize(preview.entry.size)}</small>
+          ${this.#dirty
+            ? html`<button
+                class="viewer-action icon"
+                title=${this.#saving ? "Saving…" : "Save"}
+                aria-label="Save"
+                ?disabled=${this.#saving}
+                @click=${() => void this.#save()}
+              >${saveIcon()}</button>`
+            : ""}
           ${downloadUrl === undefined ? "" : html`<a class="viewer-action icon" title="Download" aria-label="Download" href=${downloadUrl} download=${preview.entry.name}>${downloadIcon()}</a>`}
           <button class="viewer-action icon" title="Reload from disk" aria-label="Reload from disk" @click=${() => void this.#reloadFromDisk()}>${reloadIcon()}</button>
           <button class="viewer-action" title="File actions" aria-label="File actions" aria-haspopup="menu" @click=${(event: Event) => this.#openViewerMenu(event)}>⋯</button>
@@ -1402,6 +1411,10 @@ function keyFor(context: PanelContext | undefined, snapshot: SelectionSnapshot |
   if (workspaceId !== undefined) return `workspace:${workspaceId}`;
   const machineId = context?.machine.id;
   return machineId === undefined ? undefined : `machine:${machineId}`;
+}
+
+function saveIcon() {
+  return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><path d="M17 21v-8H7v8"></path><path d="M7 3v5h8"></path></svg>`;
 }
 
 function downloadIcon() {
