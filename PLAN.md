@@ -69,7 +69,7 @@ Resources: `download` (one file), `zip` (one directory tree, deflate, no symlink
 
 ## Phases
 
-1. **Read.** Browse, breadcrumbs, go-to-path, paged listing, directory refresh, per-row and folder menus, text viewer, image/PDF/Markdown preview, download file, copy absolute path, copy workspace-relative path, hidden-files toggle, deep links, per-browser persistence.
+1. **Read.** Browse, breadcrumbs, go-to-path, scrolled listing, directory refresh, per-row and folder menus, text viewer, image/PDF/Markdown preview, download file, copy absolute path, copy workspace-relative path, hidden-files toggle, deep links, per-browser persistence.
 2. **Edit.** CodeMirror with syntax highlighting and wrap toggle, save with conflict detection, reload-from-disk for a file that changed underneath the editor, dirty guard on navigation and unload, full-height toggle.
 
    Built: the editor surface, highlighting for the languages we ship grammars for (JavaScript/TypeScript, JSON, CSS, HTML, Markdown, Python, YAML, and the stream modes for shell, TOML and Dockerfile), wrap and full-height as per-browser preferences in the viewer menu, save with `Ctrl`/`Cmd`+`S` from anywhere in the panel, the changed-on-disk prompt with Reload from disk and Save anyway, and the discard prompt on navigation and page unload.
@@ -104,4 +104,4 @@ Local plugin discovery is a directory named after the plugin id under that root,
 ## Open questions
 
 - "Open terminal here" depends on a Terminal plugin hook that may not exist. Verify before phase 4; drop it if the only route is synthesising a command.
-- Whether the list needs a virtualised scroller depends on how large a listing realistically gets; paging at 500 is the first answer, measured before adding more.
+- Whether the list needs a virtualised scroller depends on how large a listing realistically gets. The list is scrolled rather than paged, capped at 20 000 entries, and built in one pass: measured 2026-11-21 in this container, 1 000 entries render in 0.3 s, 5 000 in 1.6 s and 20 000 in 7.8 s. Under a couple of thousand entries nothing is noticeable; the cap is a backstop, not a performance target.

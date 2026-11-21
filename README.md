@@ -33,6 +33,14 @@ What it will not do, because none of these has a meaning worth confirming:
 
 Temporaries from interrupted transfers are named `.<name>.fm-<uuid>`, hidden from listings, and swept when their directory is listed or by a ten-minute timer.
 
+## Limits
+
+Sizes and counts, with the numbers we measured rather than guessed:
+
+- **Listing: 20 000 entries.** A directory returns at most that many, and the list says so when it stops short. Nothing virtualises the rows, so the whole page is built at once: measured on 2026-11-21 in this container, 1 000 entries took 0.3 s to appear, 5 000 took 1.6 s, and 20 000 took 7.8 s. A directory that size is reachable but slow; a filter over the listing is the next thing that would help, and it is not built.
+- **Editing: 2 MiB of text.** Larger files, and anything binary, open read-only with a download link. The cap is a transport margin rather than a measurement of pain — a read travels as one JSON response bounded at 8 MiB, and base64 costs four thirds, so 2 MiB of text arrives as 2.7 MiB. Opening 2 MiB measured ~0.16 s, so the cap sits well below where it would hurt; the ceiling that fits is nearer 5 MiB.
+- **Uploads and downloads: no size limit.** Content is streamed — uploads in 45 KiB chunks, downloads as a resource — so a multi-gigabyte file costs the same memory as a small one.
+
 ## Development
 
 ```sh
