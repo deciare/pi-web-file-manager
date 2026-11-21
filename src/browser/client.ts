@@ -205,7 +205,20 @@ export function fromBase64(value: string): Uint8Array {
   return bytes;
 }
 
-/** Slice a byte stream into the frame-sized chunks the protocol expects. */
+/**
+ * Slice bytes into the frame-sized chunks the protocol expects.
+ *
+ * A chunk boundary may fall inside a multi-byte character: bytes are what travel,
+ * and the server writes them back verbatim, so a split at the wire is not a split
+ * in the text.
+ */
+export async function* chunkBytes(bytes: Uint8Array, chunkBytes: number): AsyncIterable<Uint8Array> {
+  for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
+    yield bytes.subarray(offset, offset + chunkBytes);
+  }
+}
+
+/** Slice a file into the frame-sized chunks the protocol expects. */
 async function* chunked(blob: Blob, chunkBytes: number): AsyncIterable<Uint8Array> {
   for (let offset = 0; offset < blob.size; offset += chunkBytes) {
     yield new Uint8Array(await blob.slice(offset, offset + chunkBytes).arrayBuffer());
@@ -242,7 +255,7 @@ export function createClient(peer: Peer): FileManagerClient {
         peer,
         "save.text",
         { path, expectedMtimeMs, ...(force === true ? { force: true } : {}) },
-        async function* () { yield new TextEncoder().encode(text); },
+        () => chunkBytes(new TextEncoder().encode(text), CONTENT_CHUNK_BYTES),
         signal,
         () => undefined,
       ),

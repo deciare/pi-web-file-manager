@@ -4,6 +4,7 @@ import { chmod, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { openChannel } from "../src/server/index.ts";
 import { base64, channelHarness, sandbox } from "./support.ts";
 import { CONTENT_ACK_WINDOW_BYTES, CONTENT_CHUNK_BYTES, CONTENT_PROGRESS_BYTES } from "../src/shared/protocol.ts";
+import { chunkBytes } from "../src/browser/client.ts";
 
 function framesOf(frames: unknown[]): Array<Record<string, unknown>> {
   return frames as Array<Record<string, unknown>>;
@@ -198,4 +199,28 @@ test("acknowledges often enough that a windowed sender never waits forever", asy
 
 test("the reporting cadence stays inside the sender's window", () => {
   assert.ok(CONTENT_PROGRESS_BYTES < CONTENT_ACK_WINDOW_BYTES);
+});
+
+/**
+ * A save of a document larger than one frame. The chunks come from the same
+ * generator the browser uses, so this covers the split as well as the write: a
+ * chunk boundary can fall inside a multi-byte character, and the bytes still
+ * have to arrive intact.
+ */
+test("saves a document that spans many frames, character boundaries included", async () => {
+  const box = await sandbox();
+  try {
+    const text = "const grüße = '✓ 日本語 ✔';\n".repeat(6000);
+    const harness = channelHarness("save.text", { path: box.path("large.md"), expectedMtimeMs: null });
+    const channel = await openChannel(harness.context);
+    for await (const chunk of chunkBytes(new TextEncoder().encode(text), CONTENT_CHUNK_BYTES)) {
+      await channel.receive({ type: "chunk", data: base64(Buffer.from(chunk)) }, harness.controller.signal);
+    }
+    await channel.receive({ type: "end" }, harness.controller.signal);
+    assert.equal(await readFile(box.path("large.md"), "utf8"), text);
+    const done = framesOf(harness.frames).find((frame) => frame["type"] === "done");
+    assert.equal(done?.["size"], Buffer.byteLength(text, "utf8"));
+  } finally {
+    await box.cleanup();
+  }
 });
