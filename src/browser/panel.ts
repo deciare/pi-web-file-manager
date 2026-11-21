@@ -123,6 +123,12 @@ export class FileManagerPanel extends LitElement {
   static override styles = css`
     :host { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--pi-text); background: var(--pi-bg); font-size: 13px; }
     .toolbar { gap: 0; border-bottom: 1px solid var(--pi-border-muted); }
+    /* The host draws a toolbar group's leading edge, which marks a boundary
+       between groups rather than the control that follows it. Here the border
+       belongs to the control: the first button in a group carries it, so both
+       rows are separated by buttons and by nothing else. */
+    .toolbar > .ui-toolbar-group { border-inline-start: 0; }
+    .toolbar > .ui-toolbar-group > .ui-button:first-child { border-inline-start: 1px solid var(--pi-border-muted); }
     .breadcrumbs { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 2px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; cursor: text; align-self: stretch; }
     .crumb { flex: 0 0 auto; border: 0; border-radius: 6px; background: none; color: var(--pi-muted); padding: 3px 5px; font: inherit; font-family: var(--pi-mono, ui-monospace, monospace); cursor: pointer; }
     .crumb:hover { background: var(--pi-surface); color: var(--pi-text); }
