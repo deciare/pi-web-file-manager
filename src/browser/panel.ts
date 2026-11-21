@@ -159,7 +159,9 @@ export class FileManagerPanel extends LitElement {
     @media (pointer: coarse) { .row-more { opacity: 1; } }
     .viewer { display: flex; flex-direction: column; min-height: 0; }
     .viewer-head { min-height: 32px; }
-    .viewer-head strong { flex: 1 1 auto; min-width: 0; padding-inline-start: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
+    /* Centred on itself, like the size label: the row stretches its children, and
+       a stretched one-line box puts its text against the top edge. */
+    .viewer-head strong { flex: 1 1 auto; align-self: center; min-width: 0; padding-inline-start: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
     /* A rule after it, so the close button reads as a control rather than as
        part of the file name that follows. */
     .viewer-head .close { width: 32px; min-width: 32px; border-inline-end: 1px solid var(--pi-border-muted); }
