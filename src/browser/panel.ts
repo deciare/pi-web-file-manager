@@ -158,20 +158,18 @@ export class FileManagerPanel extends LitElement {
     .row-wrap:hover .row-more, .row-more:focus-visible, .row-wrap.menu-open .row-more { opacity: 1; }
     @media (pointer: coarse) { .row-more { opacity: 1; } }
     .viewer { display: flex; flex-direction: column; min-height: 0; }
-    .viewer-head { display: flex; align-items: center; justify-content: space-between; gap: 0; min-height: 32px; border-bottom: 1px solid var(--pi-border-muted); }
+    .viewer-head { min-height: 32px; }
     .viewer-head strong { flex: 1 1 auto; min-width: 0; padding-inline-start: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
     /* A rule after it, so the close button reads as a control rather than as
        part of the file name that follows. */
     .viewer-head .close { width: 32px; min-width: 32px; border-inline-end: 1px solid var(--pi-border-muted); }
-    /* The file bar's controls are the toolbar's controls: same classes, same
-       32px square, same separator rule, so the two rows cannot drift apart.
-       Separators belong to the buttons and to nothing else — a wrapper that
-       drew one would put the line where its first child happens to sit, and
-       would take the pixel out of a control that is not the one being marked. */
-    .viewer-actions { align-self: stretch; display: flex; align-items: stretch; gap: 0; flex: 0 1 auto; min-width: 0; max-width: 100%; }
+    /* Both bars are the same object built the same way: a ui-toolbar holding
+       ui-toolbar-groups, so one set of rules above describes the separators in
+       both. What the file bar adds is text between two groups, which is why its
+       close button ends with a rule the address bar has no equivalent for. */
+    .viewer-actions { flex: 0 1 auto; min-width: 0; max-width: 100%; }
     .viewer-actions small { align-self: center; padding-inline: 8px; color: var(--pi-muted); font: 12px/20px var(--pi-font, system-ui, sans-serif); }
     .viewer-actions .ui-button--icon { width: 32px; min-width: 32px; }
-    .viewer-actions > .ui-button + .ui-button { border-inline-start: 1px solid var(--pi-border-muted); }
     .viewer-actions .ui-button:hover:not(:disabled) { background: var(--pi-surface-hover); color: var(--pi-text); }
     .viewer-actions .ui-button:disabled { opacity: 0.5; cursor: default; }
     .viewer-body { flex: 1; overflow: auto; min-height: 0; }
@@ -1384,7 +1382,7 @@ export class FileManagerPanel extends LitElement {
     if (preview === undefined) return html`<div class="notice">Select a file to look at it.</div>`;
     const downloadUrl = this.#client?.downloadUrl(preview.entry.path);
     const head = html`
-      <div class="viewer-head">
+      <div class="ui-toolbar toolbar viewer-head">
         <button
           class="ui-button ui-button--compact ui-button--icon close"
           title="Close file"
@@ -1392,7 +1390,7 @@ export class FileManagerPanel extends LitElement {
           @click=${() => this.#closePreview()}
         >${closeIcon()}</button>
         <strong>${this.#dirty ? html`<span class="dirty-dot" title="Unsaved changes">●</span>` : ""}${preview.entry.name}</strong>
-        <div class="viewer-actions">
+        <div class="ui-toolbar-group viewer-actions">
           <small>${formatSize(preview.entry.size)}</small>
           ${this.#dirty
             ? html`<button
